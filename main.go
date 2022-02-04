@@ -107,21 +107,9 @@ func connection(ip string) (conn *tarantool.Connection, err error) {
 	}
 
 	_, err = conn.Exec(
-		tarantool.Eval("__vshard_storage = require('vshard.storage')", []interface{}{}))
-	if err != nil {
-		log.Fatalf("\n\nCould not init vshard storage %q", err)
-	}
-
-	_, err = conn.Exec(
 		tarantool.Eval("__vshard_storage_init = require('vshard.storage.init')", []interface{}{}))
 	if err != nil {
 		log.Fatalf("Could not init vshard storage %q", err)
-	}
-
-	_, err = conn.Exec(
-		tarantool.Eval("__vshard_replicaset = require('vshard.replicaset')", []interface{}{}))
-	if err != nil {
-		log.Fatalf("Could not init vshard replicaset %q", err)
 	}
 
 	log.Println(ip + " connected!")
