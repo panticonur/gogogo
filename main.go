@@ -4,6 +4,7 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
+	"net/url"
 	"time"
 
 	"github.com/FZambia/tarantool"
@@ -43,76 +44,78 @@ type VshardCfg struct {
 	Sharding                        map[string]Replicaset
 }
 
-var Instances = map[string]*tarantool.Connection{
-	"127.0.0.1:3302": nil,
-	"127.0.0.1:3304": nil,
-}
+var cfgFilename = "/tmp/vshard_cfg.yaml"
 
 func main() {
+	instances := map[string]*tarantool.Connection{}
 
-	for ip, _ := range Instances {
-		conn, err := connection(ip)
-		if err != nil {
-			log.Fatalf("Could connect %q", err)
-		}
-		defer func() { _ = conn.Close() }()
-		Instances[ip] = conn
-
-		bucket_count := get_bucket_count(conn)
-		if bucket_count > 0 {
-			log.Fatalf("\n\nstorage is already bootstrapped!")
-		}
-	}
-
-	filename := "/tmp/vshard_cfg.yaml"
-	log.Printf("read yaml vshard cfg %s\n\n", filename)
-	yamlFile, err := ioutil.ReadFile(filename)
+	log.Printf("read yaml vshard cfg %s", cfgFilename)
+	yamlFile, err := ioutil.ReadFile(cfgFilename)
 	if err != nil {
-		log.Fatalf("\n\nread yamlFile.Get err  %s %q", filename, err)
+		log.Fatalf("Reading yamlFile.Get err  %s\n%q", cfgFilename, err)
 	}
 
 	vshard_cfg_data := VshardCfg{}
 	err = yaml.Unmarshal(yamlFile, &vshard_cfg_data)
 	if err != nil {
-		log.Fatalf("\n\nUnmarshal %q", err)
+		log.Fatalf("Unmarshal error %q", err)
+	}
+
+	for uuid, replicaset := range vshard_cfg_data.Sharding {
+		for _, replica := range replicaset.Replicas {
+			if replica.Master {
+				u, err := url.Parse("ssh://" + replica.Uri)
+				if err != nil {
+					panic(err)
+				}
+
+				conn, err := connection(u.Host)
+				if err != nil {
+					log.Fatalf("Could connect to %s\n%q", u.Host, err)
+				}
+				defer func() { _ = conn.Close() }()
+				instances[uuid] = conn // append
+
+				bucket_count := get_bucket_count(conn)
+				if bucket_count > 0 {
+					log.Fatalf("Storage %s is already bootstrapped!", u.Host)
+				}
+				break
+			}
+		}
 	}
 
 	cluster_calculate_etalon_balance(&vshard_cfg_data)
 	spew.Dump(vshard_cfg_data)
-	var etalon_bucket_count int
-	for _, v := range vshard_cfg_data.Sharding {
-		etalon_bucket_count = v.Etalon_bucket_count
-		break
-	}
 
 	var first_bucket_id int = 1
-	for ip, conn := range Instances {
-		bootstrap(ip, conn, first_bucket_id, etalon_bucket_count)
-		first_bucket_id = first_bucket_id + etalon_bucket_count
+	for uuid, conn := range instances {
+		bootstrap(uuid, conn, first_bucket_id, vshard_cfg_data.Sharding[uuid].Etalon_bucket_count)
+		first_bucket_id = first_bucket_id + vshard_cfg_data.Sharding[uuid].Etalon_bucket_count
 	}
 
 }
 
-func connection(ip string) (conn *tarantool.Connection, err error) {
+func connection(host string) (conn *tarantool.Connection, err error) {
 	log.Print("\n\n")
-	log.Println("Connecting " + ip)
+	log.Println("Connecting " + host)
 	opts := tarantool.Opts{
 		RequestTimeout: 500 * time.Millisecond,
 		User:           "admin",
 	}
 
-	conn, err = tarantool.Connect(ip, opts)
+	conn, err = tarantool.Connect(host, opts)
 	if err != nil {
-		log.Fatalf("Connection refused: %v", err)
+		log.Fatalf("Connection %s refused: %v", host, err)
 	}
 
 	_, err = conn.Exec(
 		tarantool.Eval("__vshard_storage_init = require('vshard.storage.init')", []interface{}{}))
 	if err != nil {
-		log.Fatalf("Could not init vshard storage %q", err)
+		log.Fatalf("Could not init vshard storage %s\n%q", host, err)
 	}
 
-	log.Println(ip + " connected!")
+	log.Println(host + " connected!")
 	return conn, err
 }
 
@@ -141,14 +144,14 @@ func get_bucket_count(conn *tarantool.Connection) (bucket_count int64) {
 	return bucket_count
 }
 
-func bootstrap(ip string, conn *tarantool.Connection, first_bucket_id int, etalon_bucket_count int) {
+func bootstrap(host string, conn *tarantool.Connection, first_bucket_id int, etalon_bucket_count int) {
 	log.Print("\n\n")
-	log.Printf("Bootstrap " + ip)
+	log.Printf("Bootstrap " + host)
 	cmd := "__vshard_storage_init.bucket_force_create"
 	result, err := conn.Exec(
 		tarantool.Call(cmd, []interface{}{first_bucket_id, etalon_bucket_count}))
 	if err != nil {
-		log.Fatalf("fail to %s %q", cmd, err)
+		log.Fatalf("Fail to %s on %s\n%q", cmd, host, err)
 	}
 	log.Println(result)
 }
@@ -171,7 +174,7 @@ func cluster_calculate_etalon_balance(vshard_cfg *VshardCfg) {
 	for !is_balance_found {
 		step_count = step_count + 1
 		if weight_sum <= 0 { // assert(weight_sum > 0)
-			log.Fatalf("\n\nassert(weight_sum > 0) but weight_sum = %f", weight_sum)
+			log.Fatalf("assert(weight_sum > 0) but weight_sum = %f", weight_sum)
 		}
 		var bucket_per_weight float64 = float64(bucket_count) / weight_sum
 		buckets_calculated := 0
@@ -222,13 +225,13 @@ func cluster_calculate_etalon_balance(vshard_cfg *VshardCfg) {
 			replicasets[k] = replicaset
 		}
 		if buckets_rest != 0 { // assert(buckets_rest == 0)
-			log.Fatalf("\n\nassert(buckets_rest == 0) but buckets_rest = %d", buckets_rest)
+			log.Fatalf("assert(buckets_rest == 0) but buckets_rest = %d", buckets_rest)
 		}
 		if step_count > replicaset_count {
 			// This can happed only because of a bug in this
 			// algorithm. But it occupies 100% of transaction
 			// thread, so check step count explicitly.
-			log.Fatalf("\n\nPANIC: the rebalancer is broken")
+			log.Fatalf("PANIC: the rebalancer is broken")
 			return
 		}
 	}
