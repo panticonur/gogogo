@@ -13,16 +13,16 @@ import (
 )
 
 type BucketForceCreateOpts struct {
-	first_bucket_id int64
-	count           int64
+	FirstBucketId int64
+	Count         int64
 }
 
 type Replicaset struct {
-	Weight              float64
-	Replicas            map[string]Replica
-	Etalon_bucket_count int
-	Ignore_disbalance   bool
-	Pinned_count        int
+	Weight            float64
+	Replicas          map[string]Replica
+	EtalonBucketCount int
+	IgnoreDisbalance  bool
+	PinnedCount       int
 }
 
 type Replica struct {
@@ -32,16 +32,16 @@ type Replica struct {
 }
 
 type VshardCfg struct {
-	Rebalancer_max_receiving        int
-	Bucket_count                    int
-	Collect_lua_garbage             bool
-	Sync_timeout                    int
-	Read_only                       bool
-	Sched_ref_quota                 int
-	Rebalancer_disbalance_threshold int
-	Rebalancer_max_sending          int
-	Sched_move_quota                int
-	Sharding                        map[string]Replicaset
+	RebalancerMaxReceiving        int
+	BucketCount                   int
+	CollectLuaGarbage             bool
+	SyncTimeout                   int
+	ReadOnly                      bool
+	SchedRefQuota                 int
+	RebalancerDisbalanceThreshold int
+	RebalancerMaxSending          int
+	SchedMoveQuota                int
+	Sharding                      map[string]Replicaset
 }
 
 var cfgFilename = "/tmp/vshard_cfg.yaml"
@@ -64,16 +64,16 @@ func main() {
 	for uuid, replicaset := range vshard_cfg_data.Sharding {
 		for _, replica := range replicaset.Replicas {
 			if replica.Master {
-				u, err := url.Parse("ssh://" + replica.Uri)
+				u, err := url.Parse("tarantool://" + replica.Uri)
 				if err != nil {
-					panic(err)
+					log.Fatalf("Could not parse URI %s\n%q", replica.Uri, err)
 				}
 
 				conn, err := connection(u.Host)
 				if err != nil {
 					log.Fatalf("Could connect to %s\n%q", u.Host, err)
 				}
-				defer func() { _ = conn.Close() }()
+				defer conn.Close()
 				instances[uuid] = conn // append
 
 				bucket_count := get_bucket_count(conn)
@@ -85,13 +85,13 @@ func main() {
 		}
 	}
 
-	cluster_calculate_etalon_balance(&vshard_cfg_data)
+	clusterCalculateEtalonBalance(&vshard_cfg_data)
 	spew.Dump(vshard_cfg_data)
 
 	var first_bucket_id int = 1
 	for uuid, conn := range instances {
-		bootstrap(uuid, conn, first_bucket_id, vshard_cfg_data.Sharding[uuid].Etalon_bucket_count)
-		first_bucket_id = first_bucket_id + vshard_cfg_data.Sharding[uuid].Etalon_bucket_count
+		bootstrap(uuid, conn, first_bucket_id, vshard_cfg_data.Sharding[uuid].EtalonBucketCount)
+		first_bucket_id = first_bucket_id + vshard_cfg_data.Sharding[uuid].EtalonBucketCount
 	}
 
 }
@@ -156,11 +156,11 @@ func bootstrap(host string, conn *tarantool.Connection, first_bucket_id int, eta
 	log.Println(result)
 }
 
-func cluster_calculate_etalon_balance(vshard_cfg *VshardCfg) {
+func clusterCalculateEtalonBalance(vshard_cfg *VshardCfg) {
 	log.Print("\n\n")
 	log.Println("calc etalon balance")
 	replicasets := vshard_cfg.Sharding
-	bucket_count := vshard_cfg.Bucket_count
+	bucket_count := vshard_cfg.BucketCount
 	is_balance_found := false
 	var weight_sum float64 = 0
 	step_count := 0
@@ -179,9 +179,9 @@ func cluster_calculate_etalon_balance(vshard_cfg *VshardCfg) {
 		var bucket_per_weight float64 = float64(bucket_count) / weight_sum
 		buckets_calculated := 0
 		for k, replicaset := range replicasets {
-			if !replicaset.Ignore_disbalance {
-				replicaset.Etalon_bucket_count = int(math.Ceil(replicaset.Weight * bucket_per_weight))
-				buckets_calculated = buckets_calculated + replicaset.Etalon_bucket_count
+			if !replicaset.IgnoreDisbalance {
+				replicaset.EtalonBucketCount = int(math.Ceil(replicaset.Weight * bucket_per_weight))
+				buckets_calculated = buckets_calculated + replicaset.EtalonBucketCount
 			}
 			replicasets[k] = replicaset
 		}
@@ -189,7 +189,7 @@ func cluster_calculate_etalon_balance(vshard_cfg *VshardCfg) {
 		buckets_rest := buckets_calculated - bucket_count
 		is_balance_found = true
 		for k, replicaset := range replicasets {
-			if !replicaset.Ignore_disbalance {
+			if !replicaset.IgnoreDisbalance {
 				// A situation is possible, when bucket_per_weight
 				// is not integer. Lets spread this disbalance
 				// over the cluster.
@@ -197,8 +197,8 @@ func cluster_calculate_etalon_balance(vshard_cfg *VshardCfg) {
 					n := replicaset.Weight * bucket_per_weight
 					ceil := math.Ceil(n)
 					floor := math.Floor(n)
-					if replicaset.Etalon_bucket_count > 0 && ceil != floor {
-						replicaset.Etalon_bucket_count = replicaset.Etalon_bucket_count - 1
+					if replicaset.EtalonBucketCount > 0 && ceil != floor {
+						replicaset.EtalonBucketCount = replicaset.EtalonBucketCount - 1
 						buckets_rest = buckets_rest - 1
 					}
 				}
@@ -206,8 +206,8 @@ func cluster_calculate_etalon_balance(vshard_cfg *VshardCfg) {
 				// Search for incorrigible disbalance due to
 				// pinned buckets.
 				//
-				pinned := replicaset.Pinned_count
-				if pinned != 0 && replicaset.Etalon_bucket_count < pinned {
+				pinned := replicaset.PinnedCount
+				if pinned != 0 && replicaset.EtalonBucketCount < pinned {
 					// This replicaset can not send out enough
 					// buckets to reach a balance. So do the best
 					// effort balance by sending from the
@@ -216,9 +216,9 @@ func cluster_calculate_etalon_balance(vshard_cfg *VshardCfg) {
 					// participate in the next steps of balance
 					// calculation.
 					is_balance_found = false
-					bucket_count = bucket_count - replicaset.Pinned_count
-					replicaset.Etalon_bucket_count = replicaset.Pinned_count
-					replicaset.Ignore_disbalance = true
+					bucket_count = bucket_count - replicaset.PinnedCount
+					replicaset.EtalonBucketCount = replicaset.PinnedCount
+					replicaset.IgnoreDisbalance = true
 					weight_sum = weight_sum - replicaset.Weight
 				}
 			}
