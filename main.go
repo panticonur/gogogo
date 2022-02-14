@@ -81,40 +81,46 @@ func main() {
 			}
 		}
 	}
-	/*
-		// cartridge enter srv-2
-		// box.space._bucket.index.status:select("active", {limit=10})
-		// https://github.com/tarantool/cartridge-cli/blob/master/cli/commands/cartridge.go
 
-		var routing map[uint64]*tarantool.Connection = make(map[uint64]*tarantool.Connection)
-		for {
-			for _, conn := range replicasets {
-				result, err := conn.Exec(
-					tarantool.Select("_bucket", "status", 0, uint32(getBucketCount(conn)), tarantool.IterEq, []interface{}{"active"}))
-				if err != nil {
-					log.Fatalf("fail to select active buckets\n%q", err)
-				}
+	//Bootstrap(&vshardCfgData, &replicasets)
 
-				for _, bucket := range result {
+	routing := CreateBucketRoutingTable(&vshardCfgData, &replicasets)
+	log.Println(routing)
+}
 
-					bucket_id, ok := bucket.([]interface{})[0].(uint64)
-					if !ok {
-						bucket_id_i, ok := bucket.([]interface{})[0].(int64)
-						if !ok {
-							log.Fatalf("bucket_id_i not int64")
-						}
-						bucket_id = uint64(bucket_id_i)
-					}
+func CreateBucketRoutingTable(vshardCfgData *VshardCfg, replicasets *map[string]*tarantool.Connection) map[uint64]*tarantool.Connection {
+	// cartridge enter srv-2
+	// box.space._bucket.index.status:select("active", {limit=10})
+	// https://github.com/tarantool/cartridge-cli/blob/master/cli/commands/cartridge.go
 
-					routing[bucket_id] = conn
-				}
+	var routing map[uint64]*tarantool.Connection = make(map[uint64]*tarantool.Connection)
+
+	for {
+		for _, conn := range *replicasets {
+			result, err := conn.Exec(
+				tarantool.Select("_bucket", "status", 0, uint32(getBucketCount(conn)), tarantool.IterEq, []interface{}{"active"}))
+			if err != nil {
+				log.Fatalf("fail to select active buckets\n%q", err)
 			}
-			break
-		}
-		log.Println(routing)
-	*/
 
-	Bootstrap(&vshardCfgData, &replicasets)
+			for _, bucket := range result {
+
+				bucket_id, ok := bucket.([]interface{})[0].(uint64)
+				if !ok {
+					bucket_id_i, ok := bucket.([]interface{})[0].(int64)
+					if !ok {
+						log.Fatalf("bucket_id_i not int64")
+					}
+					bucket_id = uint64(bucket_id_i)
+				}
+
+				routing[bucket_id] = conn
+			}
+		}
+		break
+	}
+
+	return routing
 }
 
 func Bootstrap(vshardCfgData *VshardCfg, replicasets *map[string]*tarantool.Connection) {
