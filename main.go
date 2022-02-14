@@ -74,14 +74,9 @@ func main() {
 					log.Fatalf("could connect to %s\n%q", u.Host, err)
 				}
 				defer conn.Close()
+
 				replicasets[replicasetUuid] = conn // append
 				log.Printf("append replicaset %s", replicasetUuid)
-
-				bucketCount := getBucketCount(conn)
-				log.Printf("bucketCount = %d", bucketCount)
-				if bucketCount > 0 {
-					log.Fatalf("storage %s is already bootstrapped.", u.Host)
-				}
 				break
 			}
 		}
@@ -119,15 +114,28 @@ func main() {
 		log.Println(routing)
 	*/
 
-	clusterCalculateEtalonBalance(&vshardCfgData)
+	Bootstrap(&vshardCfgData, &replicasets)
+}
+
+func Bootstrap(vshardCfgData *VshardCfg, replicasets *map[string]*tarantool.Connection) {
+
+	for replicasetUuid, conn := range *replicasets {
+		log.Printf("get bucket.count from %s", replicasetUuid)
+		bucketCount := getBucketCount(conn)
+		log.Printf("bucketCount = %d", bucketCount)
+		if bucketCount > 0 {
+			log.Fatalf("replicaset %s is already bootstrapped.", replicasetUuid)
+		}
+	}
+
+	clusterCalculateEtalonBalance(vshardCfgData)
 	spew.Dump(vshardCfgData)
 
 	var firstBucketId int = 1
-	for replicasetUuid, conn := range replicasets {
-		bootstrap(replicasetUuid, conn, firstBucketId, vshardCfgData.Sharding[replicasetUuid].EtalonBucketCount)
+	for replicasetUuid, conn := range *replicasets {
+		bootstrapReplicaset(replicasetUuid, conn, firstBucketId, vshardCfgData.Sharding[replicasetUuid].EtalonBucketCount)
 		firstBucketId = firstBucketId + vshardCfgData.Sharding[replicasetUuid].EtalonBucketCount
 	}
-
 }
 
 func connection(host string) (conn *tarantool.Connection, err error) {
@@ -172,7 +180,7 @@ func getBucketCount(conn *tarantool.Connection) (bucketCount int64) {
 	return bucketCount
 }
 
-func bootstrap(replicasetUuid string, conn *tarantool.Connection, firstBucketId int, etalonBucketCount int) {
+func bootstrapReplicaset(replicasetUuid string, conn *tarantool.Connection, firstBucketId int, etalonBucketCount int) {
 	log.Printf("bootstrap replicaset %s firstBucketId=%d etalonBucketCount=%d", replicasetUuid, firstBucketId, etalonBucketCount)
 	cmd := "__vshard_storage_init.bucket_force_create"
 	result, err := conn.Exec(
