@@ -31,6 +31,11 @@ type Replica struct {
 	Name   string `yaml:"name"`
 }
 
+type BucketRoute struct {
+	BucketId   uint64
+	Connection *tarantool.Connection
+}
+
 type VshardCfg struct {
 	RebalancerMaxReceiving        int  `yaml:"rebalancer_max_receiving"`
 	BucketCount                   int  `yaml:"bucket_count"`
@@ -84,11 +89,51 @@ func main() {
 
 	//Bootstrap(&vshardCfgData, &replicasets)
 
-	routing := CreateBucketRoutingTable(&vshardCfgData, &replicasets)
-	log.Println(routing)
+	routing := CreateBucketRoutingTable_Async(&replicasets, vshardCfgData.BucketCount)
+	log.Println(len(routing))
 }
 
-func CreateBucketRoutingTable(vshardCfgData *VshardCfg, replicasets *map[string]*tarantool.Connection) map[uint64]*tarantool.Connection {
+func ReadBuckets(conn *tarantool.Connection, ch chan BucketRoute) {
+	result, err := conn.Exec(
+		tarantool.Select("_bucket", "status", 0, uint32(getBucketCount(conn)), tarantool.IterEq, []interface{}{"active"}))
+	if err != nil {
+		log.Fatalf("fail to select active buckets\n%q", err)
+	}
+
+	for _, bucket := range result {
+		bucketId, ok := bucket.([]interface{})[0].(uint64)
+		if !ok {
+			_bucketId, ok := bucket.([]interface{})[0].(int64)
+			if !ok {
+				log.Fatalf("could not cast bucket[0] to int64 and uint64")
+			}
+			bucketId = uint64(_bucketId)
+		}
+		ch <- BucketRoute{bucketId, conn}
+	}
+}
+
+func CreateBucketRoutingTable_Async(replicasets *map[string]*tarantool.Connection, bucketCount int) map[uint64]*tarantool.Connection {
+	var routing map[uint64]*tarantool.Connection = make(map[uint64]*tarantool.Connection)
+
+	log.Println("start async tasks")
+	ch := make(chan BucketRoute)
+	for _, conn := range *replicasets {
+		go ReadBuckets(conn, ch)
+	}
+
+	log.Println("start to combine routing table")
+	for bucketRoute := range ch {
+		routing[bucketRoute.BucketId] = bucketRoute.Connection
+		if len(routing) >= bucketCount {
+			break
+		}
+	}
+	log.Println("bucket routing table completed")
+	return routing
+}
+
+func CreateBucketRoutingTable_Sync(replicasets *map[string]*tarantool.Connection) map[uint64]*tarantool.Connection {
 	// cartridge enter srv-2
 	// box.space._bucket.index.status:select("active", {limit=10})
 	// https://github.com/tarantool/cartridge-cli/blob/master/cli/commands/cartridge.go
@@ -105,16 +150,16 @@ func CreateBucketRoutingTable(vshardCfgData *VshardCfg, replicasets *map[string]
 
 			for _, bucket := range result {
 
-				bucket_id, ok := bucket.([]interface{})[0].(uint64)
+				bucketId, ok := bucket.([]interface{})[0].(uint64)
 				if !ok {
-					bucket_id_i, ok := bucket.([]interface{})[0].(int64)
+					_bucketId, ok := bucket.([]interface{})[0].(int64)
 					if !ok {
 						log.Fatalf("bucket_id_i not int64")
 					}
-					bucket_id = uint64(bucket_id_i)
+					bucketId = uint64(_bucketId)
 				}
 
-				routing[bucket_id] = conn
+				routing[bucketId] = conn
 			}
 		}
 		break
