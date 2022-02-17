@@ -62,7 +62,6 @@ func main() {
 	router := Router{
 		Replicasets: make(map[string]*tarantool.Connection),
 	}
-	router.Routes.Store(0, nil)
 
 	log.Printf("read vshard cfg yaml file %s", cfgFilename)
 	yamlFile, err := ioutil.ReadFile(cfgFilename)
@@ -132,7 +131,7 @@ func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) ([]interf
 	return ret, nil
 }
 
-func ReadBuckets(conn *tarantool.Connection, routing *sync.Map, wg *sync.WaitGroup) {
+func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
 	defer wg.Done()
 	var lastBucketId uint64 = 0
 	for c := 0; c < 2000; c++ {
@@ -157,7 +156,7 @@ func ReadBuckets(conn *tarantool.Connection, routing *sync.Map, wg *sync.WaitGro
 			}
 			st := bucket.([]interface{})[1].(string)
 			if st == "active" || st == "pinned" {
-				routing.Store(bucketId, conn)
+				r.Routes.Store(bucketId, conn)
 			}
 			lastBucketId = bucketId
 		}
@@ -170,7 +169,7 @@ func (r *Router) DiscoveryBuckets(bucketCount int) error {
 	log.Println("start async tasks")
 	for _, conn := range r.Replicasets {
 		wg.Add(1)
-		go ReadBuckets(conn, &r.Routes, &wg)
+		go r.ReadBuckets(conn, &wg)
 	}
 
 	wg.Wait()
