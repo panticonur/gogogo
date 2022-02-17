@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
 	"log"
 	"math"
@@ -92,7 +93,7 @@ func main() {
 
 	var routing sync.Map
 	DiscoveryBucketsInplaceAsync(&replicasets, vshardCfgData.BucketCount, &routing)
-	//log.Println(routing)
+	log.Println(routing)
 	log.Println()
 
 	var bucketId uint64 = 1
@@ -103,19 +104,20 @@ func main() {
 	}
 }
 
-func RouterCall(bucketId uint64, routing *sync.Map, proc string, arg int) {
+func RouterCall(bucketId uint64, routing *sync.Map, proc string, arg int) error {
 	// https://github.com/tarantool/vshard#adding-data
 	// result = vshard.router.call(bucket_id, mode, func, args)
 	conn, loaded := routing.Load(bucketId)
-	if loaded {
-		_, err := conn.(*tarantool.Connection).Exec(
-			tarantool.Call(proc, []interface{}{arg}))
-		if err != nil {
-			log.Printf("could not call %s\n%q", proc, err)
-		} else {
-			log.Printf("call %s", proc)
-		}
+	if !loaded {
+		return fmt.Errorf("could not find bucket #%d", bucketId)
 	}
+	_, err := conn.(*tarantool.Connection).Exec(
+		tarantool.Call(proc, []interface{}{arg}))
+	if err != nil {
+		return err
+	}
+	log.Printf("successful call '%s' remote procedure, bucket #%d", proc, bucketId)
+	return nil
 }
 
 func ReadBuckets(conn *tarantool.Connection, routing *sync.Map, wg *sync.WaitGroup) {
