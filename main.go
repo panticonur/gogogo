@@ -53,6 +53,10 @@ type VshardCfg struct {
 
 var cfgFilename = "/tmp/vshard_cfg.yaml"
 
+type Router struct {
+	Routes sync.Map
+}
+
 func main() {
 	replicasets := map[string]*tarantool.Connection{}
 
@@ -91,27 +95,29 @@ func main() {
 
 	//Bootstrap(&vshardCfgData, &replicasets)
 
-	var routing sync.Map
-	DiscoveryBucketsInplaceAsync(&replicasets, vshardCfgData.BucketCount, &routing)
-	log.Println(routing)
+	router := Router{}
+	router.Routes.Store(0, nil) // fucking bug
+	router.DiscoveryBucketsInplaceAsync(&replicasets, vshardCfgData.BucketCount)
+	log.Println(router.Routes)
 	log.Println()
 
 	var bucketId uint64 = 1
 	for ; bucketId <= 3000; bucketId++ {
 		proc := "p1"
-		_, err := RouterCall(bucketId, &routing, proc, []interface{}{101})
+		_, err := router.RouterCall(bucketId, proc, []interface{}{101})
 		if err != nil {
 			log.Printf("could not call remote proc '%s'\n%q", proc, err)
 		}
 		// cartridge enter srv-2
 		// function p1(a) local log = require('log') log.info("p1") log.info(a) end
 	}
+
 }
 
-func RouterCall(bucketId uint64, routing *sync.Map, proc string, args []interface{}) ([]interface{}, error) {
+func (r Router) RouterCall(bucketId uint64, proc string, args []interface{}) ([]interface{}, error) {
 	// https://github.com/tarantool/vshard#adding-data
 	// result = vshard.router.call(bucket_id, mode, func, args)
-	conn, loaded := routing.Load(bucketId)
+	conn, loaded := r.Routes.Load(bucketId)
 	if !loaded {
 		return nil, fmt.Errorf("could not find bucket #%d", bucketId)
 	}
@@ -156,13 +162,13 @@ func ReadBuckets(conn *tarantool.Connection, routing *sync.Map, wg *sync.WaitGro
 	}
 }
 
-func DiscoveryBucketsInplaceAsync(replicasets *map[string]*tarantool.Connection, bucketCount int, routing *sync.Map) error {
+func (r Router) DiscoveryBucketsInplaceAsync(replicasets *map[string]*tarantool.Connection, bucketCount int) error {
 	var wg sync.WaitGroup
 
 	log.Println("start async tasks")
 	for _, conn := range *replicasets {
 		wg.Add(1)
-		go ReadBuckets(conn, routing, &wg)
+		go ReadBuckets(conn, &r.Routes, &wg)
 	}
 
 	wg.Wait()
