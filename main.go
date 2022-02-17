@@ -78,7 +78,7 @@ func main() {
 
 				conn, err := connection(u.Host)
 				if err != nil {
-					log.Fatalf("could connect to %s\n%q", u.Host, err)
+					log.Fatalf("could not connect to %s\n%q", u.Host, err)
 				}
 				defer conn.Close()
 
@@ -98,26 +98,30 @@ func main() {
 
 	var bucketId uint64 = 1
 	for ; bucketId <= 3000; bucketId++ {
-		RouterCall(bucketId, &routing, "p1", 101)
+		proc := "p1"
+		_, err := RouterCall(bucketId, &routing, proc, 101)
+		if err != nil {
+			log.Printf("could not call remote proc '%s'\n%q", proc, err)
+		}
 		// cartridge enter srv-2
 		// function p1(a) local log = require('log') log.info("p1") log.info(a) end
 	}
 }
 
-func RouterCall(bucketId uint64, routing *sync.Map, proc string, arg int) error {
+func RouterCall(bucketId uint64, routing *sync.Map, proc string, arg int) ([]interface{}, error) {
 	// https://github.com/tarantool/vshard#adding-data
 	// result = vshard.router.call(bucket_id, mode, func, args)
 	conn, loaded := routing.Load(bucketId)
 	if !loaded {
-		return fmt.Errorf("could not find bucket #%d", bucketId)
+		return nil, fmt.Errorf("could not find bucket #%d", bucketId)
 	}
-	_, err := conn.(*tarantool.Connection).Exec(
+	ret, err := conn.(*tarantool.Connection).Exec(
 		tarantool.Call(proc, []interface{}{arg}))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	log.Printf("successful call '%s' remote procedure, bucket #%d", proc, bucketId)
-	return nil
+	return ret, nil
 }
 
 func ReadBuckets(conn *tarantool.Connection, routing *sync.Map, wg *sync.WaitGroup) {
