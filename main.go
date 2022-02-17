@@ -99,7 +99,7 @@ func main() {
 	var bucketId uint64 = 1
 	for ; bucketId <= 3000; bucketId++ {
 		proc := "p1"
-		_, err := RouterCall(bucketId, &routing, proc, 101)
+		_, err := RouterCall(bucketId, &routing, proc, []interface{}{101})
 		if err != nil {
 			log.Printf("could not call remote proc '%s'\n%q", proc, err)
 		}
@@ -108,7 +108,7 @@ func main() {
 	}
 }
 
-func RouterCall(bucketId uint64, routing *sync.Map, proc string, arg int) ([]interface{}, error) {
+func RouterCall(bucketId uint64, routing *sync.Map, proc string, args []interface{}) ([]interface{}, error) {
 	// https://github.com/tarantool/vshard#adding-data
 	// result = vshard.router.call(bucket_id, mode, func, args)
 	conn, loaded := routing.Load(bucketId)
@@ -116,7 +116,7 @@ func RouterCall(bucketId uint64, routing *sync.Map, proc string, arg int) ([]int
 		return nil, fmt.Errorf("could not find bucket #%d", bucketId)
 	}
 	ret, err := conn.(*tarantool.Connection).Exec(
-		tarantool.Call(proc, []interface{}{arg}))
+		tarantool.Call(proc, args))
 	if err != nil {
 		return nil, err
 	}
