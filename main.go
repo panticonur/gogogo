@@ -92,7 +92,30 @@ func main() {
 
 	var routing sync.Map
 	DiscoveryBucketsInplaceAsync(&replicasets, vshardCfgData.BucketCount, &routing)
-	log.Println(routing)
+	//log.Println(routing)
+	log.Println()
+
+	var bucketId uint64 = 1
+	for ; bucketId <= 3000; bucketId++ {
+		RouterCall(bucketId, &routing, "p1", 101)
+		// cartridge enter srv-2
+		// function p1(a) local log = require('log') log.info("p1") log.info(a) end
+	}
+}
+
+func RouterCall(bucketId uint64, routing *sync.Map, proc string, arg int) {
+	// https://github.com/tarantool/vshard#adding-data
+	// result = vshard.router.call(bucket_id, mode, func, args)
+	conn, loaded := routing.Load(bucketId)
+	if loaded {
+		_, err := conn.(*tarantool.Connection).Exec(
+			tarantool.Call(proc, []interface{}{arg}))
+		if err != nil {
+			log.Printf("could not call %s\n%q", proc, err)
+		} else {
+			log.Printf("call %s", proc)
+		}
+	}
 }
 
 func ReadBuckets(conn *tarantool.Connection, routing *sync.Map, wg *sync.WaitGroup) {
