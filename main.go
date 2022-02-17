@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/FZambia/tarantool"
@@ -89,51 +90,58 @@ func main() {
 
 	//Bootstrap(&vshardCfgData, &replicasets)
 
-	routing := CreateBucketRoutingTable_Async(&replicasets, vshardCfgData.BucketCount)
-	log.Println(len(routing))
+	var routing sync.Map
+	DiscoveryBucketsInplaceAsync(&replicasets, vshardCfgData.BucketCount, &routing)
+	log.Println(routing)
 }
 
-func ReadBuckets(conn *tarantool.Connection, ch chan BucketRoute) {
-	result, err := conn.Exec(
-		tarantool.Select("_bucket", "status", 0, uint32(getBucketCount(conn)), tarantool.IterEq, []interface{}{"active"}))
-	if err != nil {
-		log.Fatalf("fail to select active buckets\n%q", err)
-	}
-
-	for _, bucket := range result {
-		bucketId, ok := bucket.([]interface{})[0].(uint64)
-		if !ok {
-			_bucketId, ok := bucket.([]interface{})[0].(int64)
-			if !ok {
-				log.Fatalf("could not cast bucket[0] to int64 and uint64")
-			}
-			bucketId = uint64(_bucketId)
+func ReadBuckets(conn *tarantool.Connection, routing *sync.Map, wg *sync.WaitGroup) {
+	defer wg.Done()
+	var lastBucketId uint64 = 0
+	for c := 0; c < 2000; c++ {
+		result, err := conn.Exec(
+			tarantool.Select("_bucket", "pk", 0, 1000, tarantool.IterGt, []interface{}{lastBucketId}))
+		if err != nil {
+			log.Printf("fail to select active buckets\n%q", err)
 		}
-		ch <- BucketRoute{bucketId, conn}
-	}
-}
-
-func CreateBucketRoutingTable_Async(replicasets *map[string]*tarantool.Connection, bucketCount int) map[uint64]*tarantool.Connection {
-	var routing map[uint64]*tarantool.Connection = make(map[uint64]*tarantool.Connection)
-
-	log.Println("start async tasks")
-	ch := make(chan BucketRoute)
-	for _, conn := range *replicasets {
-		go ReadBuckets(conn, ch)
-	}
-
-	log.Println("start to combine routing table")
-	for bucketRoute := range ch {
-		routing[bucketRoute.BucketId] = bucketRoute.Connection
-		if len(routing) >= bucketCount {
+		if len(result) == 0 {
 			break
 		}
+
+		for _, bucket := range result {
+			bucketId, ok := bucket.([]interface{})[0].(uint64)
+			if !ok {
+				_bucketId, ok := bucket.([]interface{})[0].(int64)
+				if !ok {
+					log.Printf("could not cast bucket[0] to int64 and uint64")
+					continue
+				}
+				bucketId = uint64(_bucketId)
+			}
+			st := bucket.([]interface{})[1].(string)
+			if st == "active" || st == "pinned" {
+				routing.Store(bucketId, conn)
+			}
+			lastBucketId = bucketId
+		}
 	}
-	log.Println("bucket routing table completed")
-	return routing
 }
 
-func CreateBucketRoutingTable_Sync(replicasets *map[string]*tarantool.Connection) map[uint64]*tarantool.Connection {
+func DiscoveryBucketsInplaceAsync(replicasets *map[string]*tarantool.Connection, bucketCount int, routing *sync.Map) error {
+	var wg sync.WaitGroup
+
+	log.Println("start async tasks")
+	for _, conn := range *replicasets {
+		wg.Add(1)
+		go ReadBuckets(conn, routing, &wg)
+	}
+
+	wg.Wait()
+
+	return nil
+}
+
+func CreateBucketRoutingTableSync(replicasets *map[string]*tarantool.Connection) map[uint64]*tarantool.Connection {
 	// cartridge enter srv-2
 	// box.space._bucket.index.status:select("active", {limit=10})
 	// https://github.com/tarantool/cartridge-cli/blob/master/cli/commands/cartridge.go
