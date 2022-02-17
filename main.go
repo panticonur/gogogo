@@ -54,11 +54,15 @@ type VshardCfg struct {
 var cfgFilename = "/tmp/vshard_cfg.yaml"
 
 type Router struct {
-	Routes sync.Map
+	Replicasets map[string]*tarantool.Connection
+	Routes      sync.Map
 }
 
 func main() {
-	replicasets := map[string]*tarantool.Connection{}
+	router := Router{
+		Replicasets: make(map[string]*tarantool.Connection),
+	}
+	router.Routes.Store(0, nil)
 
 	log.Printf("read vshard cfg yaml file %s", cfgFilename)
 	yamlFile, err := ioutil.ReadFile(cfgFilename)
@@ -86,7 +90,7 @@ func main() {
 				}
 				defer conn.Close()
 
-				replicasets[replicasetUuid] = conn // append
+				router.Replicasets[replicasetUuid] = conn // append
 				log.Printf("append replicaset %s", replicasetUuid)
 				break
 			}
@@ -95,16 +99,14 @@ func main() {
 
 	//Bootstrap(&vshardCfgData, &replicasets)
 
-	router := Router{}
-	router.Routes.Store(0, nil) // fucking bug
-	router.DiscoveryBucketsInplaceAsync(&replicasets, vshardCfgData.BucketCount)
+	router.DiscoveryBuckets(vshardCfgData.BucketCount)
 	log.Println(router.Routes)
 	log.Println()
 
 	var bucketId uint64 = 1
 	for ; bucketId <= 3000; bucketId++ {
 		proc := "p1"
-		_, err := router.RouterCall(bucketId, proc, []interface{}{101})
+		_, err := router.RPC(bucketId, proc, []interface{}{101})
 		if err != nil {
 			log.Printf("could not call remote proc '%s'\n%q", proc, err)
 		}
@@ -114,7 +116,7 @@ func main() {
 
 }
 
-func (r Router) RouterCall(bucketId uint64, proc string, args []interface{}) ([]interface{}, error) {
+func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) ([]interface{}, error) {
 	// https://github.com/tarantool/vshard#adding-data
 	// result = vshard.router.call(bucket_id, mode, func, args)
 	conn, loaded := r.Routes.Load(bucketId)
@@ -162,11 +164,11 @@ func ReadBuckets(conn *tarantool.Connection, routing *sync.Map, wg *sync.WaitGro
 	}
 }
 
-func (r Router) DiscoveryBucketsInplaceAsync(replicasets *map[string]*tarantool.Connection, bucketCount int) error {
+func (r *Router) DiscoveryBuckets(bucketCount int) error {
 	var wg sync.WaitGroup
 
 	log.Println("start async tasks")
-	for _, conn := range *replicasets {
+	for _, conn := range r.Replicasets {
 		wg.Add(1)
 		go ReadBuckets(conn, &r.Routes, &wg)
 	}
