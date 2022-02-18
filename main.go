@@ -118,7 +118,7 @@ func (r *Router) ConnectMasterInstancies() error {
 					return fmt.Errorf("could not connect to %s\n%v", u.Host, err)
 				}
 
-				r.Replicasets[replicasetUuid] = conn // append
+				r.Replicasets[replicasetUuid] = conn
 				log.Printf("append replicaset %s, master %s", replicasetUuid, u.Host)
 				break
 			}
@@ -156,20 +156,19 @@ func (r *Router) CloseConnections() {
 	}
 }
 
-func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) ([]interface{}, error) {
+func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) (retVal []interface{}, err error) {
 	// https://github.com/tarantool/vshard#adding-data
-	// result = vshard.router.call(bucket_id, mode, func, args)
 	conn, loaded := r.Routes.Load(bucketId)
 	if !loaded {
 		return nil, fmt.Errorf("could not find bucket #%d", bucketId)
 	}
-	ret, err := conn.(*tarantool.Connection).Exec(
+	retVal, err = conn.(*tarantool.Connection).Exec(
 		tarantool.Call(proc, args))
 	if err != nil {
 		return nil, err
 	}
 	log.Printf("successful call '%s' remote procedure, bucket #%d", proc, bucketId)
-	return ret, nil
+	return retVal, nil
 }
 
 func (r *Router) DiscoveryBuckets() error {
@@ -225,7 +224,7 @@ func (r *Router) Bootstrap() error {
 		}
 		log.Printf("bucketCount = %d", bucketCount)
 		if bucketCount > 0 {
-			return fmt.Errorf("replicaset %s is already bootstrapped.", replicasetUuid)
+			return fmt.Errorf("replicaset %s is already bootstrapped", replicasetUuid)
 		}
 	}
 
@@ -254,7 +253,7 @@ func (r *Router) Bootstrap() error {
 }
 
 func getBucketCount(conn *tarantool.Connection) (bucketCount int64, err error) {
-	cmd := "box.space._bucket:count" //"vshard.storage.buckets_count"
+	cmd := "box.space._bucket:count" // or "vshard.storage.buckets_count"
 	rawBucketCount, err := conn.Exec(
 		tarantool.Call(cmd, []interface{}{}))
 	if err != nil {
@@ -288,7 +287,7 @@ func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) error {
 
 	for !isBalanceFound {
 		stepCount = stepCount + 1
-		if weightSum <= 0 { // assert(weight_sum > 0)
+		if weightSum <= 0 {
 			return fmt.Errorf("assert(weight_sum > 0) but weight_sum = %f", weightSum)
 		}
 		var bucketPerWeight float64 = float64(bucketCount) / weightSum
@@ -339,7 +338,7 @@ func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) error {
 			}
 			replicasets[k] = replicaset
 		}
-		if bucketsRest != 0 { // assert(buckets_rest == 0)
+		if bucketsRest != 0 {
 			return fmt.Errorf("assert(buckets_rest == 0) but buckets_rest = %d", bucketsRest)
 		}
 		if stepCount > replicasetCount {
