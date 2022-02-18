@@ -86,7 +86,7 @@ func main() {
 	for ; bucketId <= uint64(router.VshardCfg.BucketCount); bucketId += 500 {
 		proc := "p1"
 		if _, err := router.RPC(bucketId, proc, []interface{}{101}); err != nil {
-			log.Printf("could not call remote proc '%s'\n%q", proc, err)
+			log.Printf("could not call remote proc '%s'\n%v", proc, err)
 		}
 	}
 }
@@ -191,7 +191,7 @@ func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
 		result, err := conn.Exec(
 			tarantool.Select("_bucket", "pk", 0, 1000, tarantool.IterGt, []interface{}{lastBucketId}))
 		if err != nil {
-			log.Printf("fail to select active buckets\n%q", err)
+			log.Printf("fail to select active buckets\n%v", err)
 		}
 		if len(result) == 0 {
 			break
