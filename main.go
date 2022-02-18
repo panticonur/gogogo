@@ -60,10 +60,10 @@ type Router struct {
 }
 
 func main() {
-	// rm -rf tmp; cartridge start
-	// cartridge replicasets setup --bootstrap-vshard
-	// cartridge enter srv-2
-	// function p1(a) local log = require('log') log.info("p1") log.info(a) end
+	// console1> rm -rf tmp; cartridge start
+	// console2> cartridge replicasets setup --bootstrap-vshard
+	// console3> cartridge enter srv-2
+	// console3> function p1(a) local log = require('log') log.info("p1") log.info(a) end
 	router := Router{
 		Replicasets: make(map[string]*tarantool.Connection),
 	}
@@ -135,17 +135,17 @@ func connection(host string) (conn *tarantool.Connection, err error) {
 
 	conn, err = tarantool.Connect(host, opts)
 	if err != nil {
-		log.Fatalf("connection to %s refused\n%q", host, err)
+		return nil, fmt.Errorf("connection to %s refused\n%q", host, err)
 	}
 
 	_, err = conn.Exec(
 		tarantool.Eval("__vshard_storage_init = require('vshard.storage.init')", []interface{}{}))
 	if err != nil {
-		log.Fatalf("could not init vshard storage %s\n%q", host, err)
+		return nil, fmt.Errorf("could not init vshard storage %s\n%q", host, err)
 	}
 
 	log.Println(host + " connected!")
-	return conn, err
+	return conn, nil
 }
 
 func (r *Router) CloseConnections() {
@@ -218,7 +218,10 @@ func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
 func (r *Router) Bootstrap() error {
 	for replicasetUuid, conn := range r.Replicasets {
 		log.Printf("get bucket.count from %s", replicasetUuid)
-		bucketCount := getBucketCount(conn)
+		bucketCount, err := getBucketCount(conn)
+		if err != nil {
+			return fmt.Errorf("fail to get bucket count %s\n%q", replicasetUuid, err)
+		}
 		log.Printf("bucketCount = %d", bucketCount)
 		if bucketCount > 0 {
 			return fmt.Errorf("replicaset %s is already bootstrapped.", replicasetUuid)
@@ -249,27 +252,26 @@ func (r *Router) Bootstrap() error {
 	return nil
 }
 
-func getBucketCount(conn *tarantool.Connection) (bucketCount int64) {
+func getBucketCount(conn *tarantool.Connection) (bucketCount int64, err error) {
 	cmd := "box.space._bucket:count" //"vshard.storage.buckets_count"
 	rawBucketCount, err := conn.Exec(
 		tarantool.Call(cmd, []interface{}{}))
 	if err != nil {
-		log.Fatalf("could not get %s\n%q", cmd, err)
+		return 0, fmt.Errorf("could not get %s\n%q", cmd, err)
 	}
 
 	bucketCount, ok := rawBucketCount[0].(int64)
 	if !ok {
 		_bucketCount, ok := rawBucketCount[0].(uint64)
 		if !ok {
-			log.Fatalf("could not cast rawBucketCount[0] to int64 and uint64")
+			return 0, fmt.Errorf("could not cast rawBucketCount[0] to int64 and uint64")
 		}
 		bucketCount = int64(_bucketCount)
 	}
-
-	return bucketCount
+	return bucketCount, nil
 }
 
-func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) {
+func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) error {
 	log.Println("calculating etalon balance")
 	replicasets := vshardCfg.Sharding
 	bucketCount := vshardCfg.BucketCount
@@ -286,7 +288,7 @@ func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) {
 	for !isBalanceFound {
 		stepCount = stepCount + 1
 		if weightSum <= 0 { // assert(weight_sum > 0)
-			log.Fatalf("assert(weight_sum > 0) but weight_sum = %f", weightSum)
+			return fmt.Errorf("assert(weight_sum > 0) but weight_sum = %f", weightSum)
 		}
 		var bucketPerWeight float64 = float64(bucketCount) / weightSum
 		bucketsCalculated := 0
@@ -337,14 +339,14 @@ func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) {
 			replicasets[k] = replicaset
 		}
 		if bucketsRest != 0 { // assert(buckets_rest == 0)
-			log.Fatalf("assert(buckets_rest == 0) but buckets_rest = %d", bucketsRest)
+			return fmt.Errorf("assert(buckets_rest == 0) but buckets_rest = %d", bucketsRest)
 		}
 		if stepCount > replicasetCount {
 			// This can happed only because of a bug in this
 			// algorithm. But it occupies 100% of transaction
 			// thread, so check step count explicitly.
-			log.Fatalf("the rebalancer is broken")
-			return
+			return fmt.Errorf("the rebalancer is broken")
 		}
 	}
+	return nil
 }
