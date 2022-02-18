@@ -59,24 +59,25 @@ type Router struct {
 	VshardCfg   VshardConfig
 }
 
+// console1> rm -rf tmp; cartridge start
+// console2> cartridge replicasets setup --bootstrap-vshard
+// console3> cartridge enter srv-2
+// console3> function p1(a) local log = require('log') log.info("p1") log.info(a) end
+
 func main() {
-	// console1> rm -rf tmp; cartridge start
-	// console2> cartridge replicasets setup --bootstrap-vshard
-	// console3> cartridge enter srv-2
-	// console3> function p1(a) local log = require('log') log.info("p1") log.info(a) end
 	router := Router{
 		Replicasets: make(map[string]*tarantool.Connection),
 	}
 	if err := router.ReadConfig(VshardConfigFilename); err != nil {
-		log.Fatalf("error reading '%s' vshard config\n%q", VshardConfigFilename, err)
+		log.Fatalf("error reading '%s' vshard config\n%v", VshardConfigFilename, err)
 	}
 	if err := router.ConnectMasterInstancies(); err != nil {
-		log.Fatalf("%q", err)
+		log.Fatalf("connection error\n%v", err)
 	}
 	defer router.CloseConnections()
 
 	if err := router.Bootstrap(); err != nil {
-		log.Fatal(err)
+		log.Fatalf("bootstap error\n%v", err)
 	}
 
 	router.DiscoveryBuckets()
@@ -94,11 +95,11 @@ func (r *Router) ReadConfig(configFilename string) error {
 	log.Printf("read vshard cfg yaml file %s", configFilename)
 	yamlFile, err := ioutil.ReadFile(configFilename)
 	if err != nil {
-		return fmt.Errorf("reading yaml error\n%q", err)
+		return fmt.Errorf("reading yaml error\n%v", err)
 	}
 
 	if err := yaml.Unmarshal(yamlFile, &r.VshardCfg); err != nil {
-		return fmt.Errorf("unmarshal vshard config error\n%q", err)
+		return fmt.Errorf("unmarshal vshard config error\n%v", err)
 	}
 	return nil
 }
@@ -109,12 +110,12 @@ func (r *Router) ConnectMasterInstancies() error {
 			if replica.Master {
 				u, err := url.Parse("tarantool://" + replica.Uri)
 				if err != nil {
-					return fmt.Errorf("could not parse URI %s\n%q", replica.Uri, err)
+					return fmt.Errorf("could not parse URI %s\n%v", replica.Uri, err)
 				}
 
 				conn, err := connection(u.Host)
 				if err != nil {
-					return fmt.Errorf("could not connect to %s\n%q", u.Host, err)
+					return fmt.Errorf("could not connect to %s\n%v", u.Host, err)
 				}
 
 				r.Replicasets[replicasetUuid] = conn // append
@@ -135,13 +136,13 @@ func connection(host string) (conn *tarantool.Connection, err error) {
 
 	conn, err = tarantool.Connect(host, opts)
 	if err != nil {
-		return nil, fmt.Errorf("connection to %s refused\n%q", host, err)
+		return nil, fmt.Errorf("connection to %s refused\n%v", host, err)
 	}
 
 	_, err = conn.Exec(
 		tarantool.Eval("__vshard_storage_init = require('vshard.storage.init')", []interface{}{}))
 	if err != nil {
-		return nil, fmt.Errorf("could not init vshard storage %s\n%q", host, err)
+		return nil, fmt.Errorf("could not init vshard storage %s\n%v", host, err)
 	}
 
 	log.Println(host + " connected!")
@@ -220,7 +221,7 @@ func (r *Router) Bootstrap() error {
 		log.Printf("get bucket.count from %s", replicasetUuid)
 		bucketCount, err := getBucketCount(conn)
 		if err != nil {
-			return fmt.Errorf("fail to get bucket count %s\n%q", replicasetUuid, err)
+			return fmt.Errorf("fail to get bucket count %s\n%v", replicasetUuid, err)
 		}
 		log.Printf("bucketCount = %d", bucketCount)
 		if bucketCount > 0 {
@@ -239,7 +240,7 @@ func (r *Router) Bootstrap() error {
 		result, err := conn.Exec(
 			tarantool.Call(cmd, []interface{}{firstBucketId, etalonBucketCount}))
 		if err != nil {
-			return fmt.Errorf("fail to %s\n%q", cmd, err)
+			return fmt.Errorf("fail to %s\n%v", cmd, err)
 		}
 
 		if !result[0].(bool) {
@@ -257,7 +258,7 @@ func getBucketCount(conn *tarantool.Connection) (bucketCount int64, err error) {
 	rawBucketCount, err := conn.Exec(
 		tarantool.Call(cmd, []interface{}{}))
 	if err != nil {
-		return 0, fmt.Errorf("could not get %s\n%q", cmd, err)
+		return 0, fmt.Errorf("could not get %s\n%v", cmd, err)
 	}
 
 	bucketCount, ok := rawBucketCount[0].(int64)
