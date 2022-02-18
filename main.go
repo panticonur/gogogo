@@ -126,6 +126,28 @@ func (r *Router) ConnectMasterInstancies() error {
 	return nil
 }
 
+func connection(host string) (conn *tarantool.Connection, err error) {
+	log.Println("connecting to " + host)
+	opts := tarantool.Opts{
+		RequestTimeout: 500 * time.Millisecond,
+		User:           "admin",
+	}
+
+	conn, err = tarantool.Connect(host, opts)
+	if err != nil {
+		log.Fatalf("connection to %s refused\n%q", host, err)
+	}
+
+	_, err = conn.Exec(
+		tarantool.Eval("__vshard_storage_init = require('vshard.storage.init')", []interface{}{}))
+	if err != nil {
+		log.Fatalf("could not init vshard storage %s\n%q", host, err)
+	}
+
+	log.Println(host + " connected!")
+	return conn, err
+}
+
 func (r *Router) CloseConnections() {
 	for replicasetUuid, conn := range r.Replicasets {
 		conn.Close()
@@ -147,6 +169,19 @@ func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) ([]interf
 	}
 	log.Printf("successful call '%s' remote procedure, bucket #%d", proc, bucketId)
 	return ret, nil
+}
+
+func (r *Router) DiscoveryBuckets() error {
+	var wg sync.WaitGroup
+
+	log.Println("start async tasks")
+	for _, conn := range r.Replicasets {
+		wg.Add(1)
+		go r.ReadBuckets(conn, &wg)
+	}
+
+	wg.Wait()
+	return nil
 }
 
 func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
@@ -178,19 +213,6 @@ func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
 			lastBucketId = bucketId
 		}
 	}
-}
-
-func (r *Router) DiscoveryBuckets() error {
-	var wg sync.WaitGroup
-
-	log.Println("start async tasks")
-	for _, conn := range r.Replicasets {
-		wg.Add(1)
-		go r.ReadBuckets(conn, &wg)
-	}
-
-	wg.Wait()
-	return nil
 }
 
 func (r *Router) Bootstrap() error {
@@ -225,28 +247,6 @@ func (r *Router) Bootstrap() error {
 		firstBucketId += etalonBucketCount
 	}
 	return nil
-}
-
-func connection(host string) (conn *tarantool.Connection, err error) {
-	log.Println("connecting to " + host)
-	opts := tarantool.Opts{
-		RequestTimeout: 500 * time.Millisecond,
-		User:           "admin",
-	}
-
-	conn, err = tarantool.Connect(host, opts)
-	if err != nil {
-		log.Fatalf("connection to %s refused\n%q", host, err)
-	}
-
-	_, err = conn.Exec(
-		tarantool.Eval("__vshard_storage_init = require('vshard.storage.init')", []interface{}{}))
-	if err != nil {
-		log.Fatalf("could not init vshard storage %s\n%q", host, err)
-	}
-
-	log.Println(host + " connected!")
-	return conn, err
 }
 
 func getBucketCount(conn *tarantool.Connection) (bucketCount int64) {
