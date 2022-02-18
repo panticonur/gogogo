@@ -38,7 +38,7 @@ type BucketRoute struct {
 	Connection *tarantool.Connection
 }
 
-type VshardCfg struct {
+type VshardConfig struct {
 	RebalancerMaxReceiving        int  `yaml:"rebalancer_max_receiving"`
 	BucketCount                   int  `yaml:"bucket_count"`
 	CollectLuaGarbage             bool `yaml:"collect_lua_garbage"`
@@ -51,11 +51,12 @@ type VshardCfg struct {
 	Sharding                      map[string]Replicaset
 }
 
-var cfgFilename = "/tmp/vshard_cfg.yaml"
+var VshardConfigFilename = "/tmp/vshard_cfg.yaml"
 
 type Router struct {
 	Replicasets map[string]*tarantool.Connection
 	Routes      sync.Map
+	VshardCfg   VshardConfig
 }
 
 func main() {
@@ -63,56 +64,78 @@ func main() {
 		Replicasets: make(map[string]*tarantool.Connection),
 	}
 
-	log.Printf("read vshard cfg yaml file %s", cfgFilename)
-	yamlFile, err := ioutil.ReadFile(cfgFilename)
-	if err != nil {
-		log.Fatalf("reading yaml error\n%q", err)
+	if err := router.ReadConfig(VshardConfigFilename); err != nil {
+		log.Fatalf("error reading '%s' vshard config\n%q", VshardConfigFilename, err)
 	}
 
-	vshardCfgData := VshardCfg{}
-	err = yaml.Unmarshal(yamlFile, &vshardCfgData)
-	if err != nil {
-		log.Fatalf("unmarshal vshard config error\n%q", err)
+	if err := router.ConnectMasterInstancies(); err != nil {
+		log.Fatalf("%q", err)
 	}
-
-	for replicasetUuid, replicaset := range vshardCfgData.Sharding {
-		for _, replica := range replicaset.Replicas {
-			if replica.Master {
-				u, err := url.Parse("tarantool://" + replica.Uri)
-				if err != nil {
-					log.Fatalf("could not parse URI %s\n%q", replica.Uri, err)
-				}
-
-				conn, err := connection(u.Host)
-				if err != nil {
-					log.Fatalf("could not connect to %s\n%q", u.Host, err)
-				}
-				defer conn.Close()
-
-				router.Replicasets[replicasetUuid] = conn // append
-				log.Printf("append replicaset %s", replicasetUuid)
-				break
-			}
-		}
-	}
+	defer router.CloseConnections()
 
 	//Bootstrap(&vshardCfgData, &replicasets)
 
-	router.DiscoveryBuckets(vshardCfgData.BucketCount)
-	log.Println(router.Routes)
-	log.Println()
+	router.DiscoveryBuckets()
+	//router.Print()
 
 	var bucketId uint64 = 1
-	for ; bucketId <= 3000; bucketId++ {
+	for ; bucketId <= uint64(router.VshardCfg.BucketCount); bucketId += 500 {
 		proc := "p1"
-		_, err := router.RPC(bucketId, proc, []interface{}{101})
-		if err != nil {
+		if _, err := router.RPC(bucketId, proc, []interface{}{101}); err != nil {
 			log.Printf("could not call remote proc '%s'\n%q", proc, err)
 		}
 		// cartridge enter srv-2
 		// function p1(a) local log = require('log') log.info("p1") log.info(a) end
 	}
 
+}
+
+func (r *Router) Print() {
+	log.Println(r.Routes)
+	log.Println()
+}
+
+func (r *Router) ReadConfig(configFilename string) error {
+	log.Printf("read vshard cfg yaml file %s", configFilename)
+	yamlFile, err := ioutil.ReadFile(configFilename)
+	if err != nil {
+		return fmt.Errorf("reading yaml error\n%q", err)
+	}
+
+	if err := yaml.Unmarshal(yamlFile, &r.VshardCfg); err != nil {
+		return fmt.Errorf("unmarshal vshard config error\n%q", err)
+	}
+	return nil
+}
+
+func (r *Router) ConnectMasterInstancies() error {
+	for replicasetUuid, replicaset := range r.VshardCfg.Sharding {
+		for _, replica := range replicaset.Replicas {
+			if replica.Master {
+				u, err := url.Parse("tarantool://" + replica.Uri)
+				if err != nil {
+					return fmt.Errorf("could not parse URI %s\n%q", replica.Uri, err)
+				}
+
+				conn, err := connection(u.Host)
+				if err != nil {
+					return fmt.Errorf("could not connect to %s\n%q", u.Host, err)
+				}
+
+				r.Replicasets[replicasetUuid] = conn // append
+				log.Printf("append replicaset %s, master %s", replicasetUuid, u.Host)
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Router) CloseConnections() {
+	for replicasetUuid, conn := range r.Replicasets {
+		conn.Close()
+		log.Printf("close connection replicaset %s", replicasetUuid)
+	}
 }
 
 func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) ([]interface{}, error) {
@@ -154,8 +177,7 @@ func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
 				}
 				bucketId = uint64(_bucketId)
 			}
-			st := bucket.([]interface{})[1].(string)
-			if st == "active" || st == "pinned" {
+			if st := bucket.([]interface{})[1].(string); st == "active" || st == "pinned" {
 				r.Routes.Store(bucketId, conn)
 			}
 			lastBucketId = bucketId
@@ -163,7 +185,7 @@ func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
 	}
 }
 
-func (r *Router) DiscoveryBuckets(bucketCount int) error {
+func (r *Router) DiscoveryBuckets() error {
 	var wg sync.WaitGroup
 
 	log.Println("start async tasks")
@@ -173,7 +195,6 @@ func (r *Router) DiscoveryBuckets(bucketCount int) error {
 	}
 
 	wg.Wait()
-
 	return nil
 }
 
@@ -212,7 +233,7 @@ func CreateBucketRoutingTableSync(replicasets *map[string]*tarantool.Connection)
 	return routing
 }
 
-func Bootstrap(vshardCfgData *VshardCfg, replicasets *map[string]*tarantool.Connection) {
+func Bootstrap(vshardCfgData *VshardConfig, replicasets *map[string]*tarantool.Connection) {
 
 	for replicasetUuid, conn := range *replicasets {
 		log.Printf("get bucket.count from %s", replicasetUuid)
@@ -290,7 +311,7 @@ func bootstrapReplicaset(replicasetUuid string, conn *tarantool.Connection, firs
 	log.Printf("replicaset %s bootstrapped!", replicasetUuid)
 }
 
-func clusterCalculateEtalonBalance(vshardCfg *VshardCfg) {
+func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) {
 	log.Println("calculating etalon balance")
 	replicasets := vshardCfg.Sharding
 	bucketCount := vshardCfg.BucketCount
