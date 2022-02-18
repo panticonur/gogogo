@@ -60,23 +60,26 @@ type Router struct {
 }
 
 func main() {
+	// rm -rf tmp; cartridge start
+	// cartridge replicasets setup --bootstrap-vshard
+	// cartridge enter srv-2
+	// function p1(a) local log = require('log') log.info("p1") log.info(a) end
 	router := Router{
 		Replicasets: make(map[string]*tarantool.Connection),
 	}
-
 	if err := router.ReadConfig(VshardConfigFilename); err != nil {
 		log.Fatalf("error reading '%s' vshard config\n%q", VshardConfigFilename, err)
 	}
-
 	if err := router.ConnectMasterInstancies(); err != nil {
 		log.Fatalf("%q", err)
 	}
 	defer router.CloseConnections()
 
-	//Bootstrap(&vshardCfgData, &replicasets)
+	if err := router.Bootstrap(); err != nil {
+		log.Fatal(err)
+	}
 
 	router.DiscoveryBuckets()
-	//router.Print()
 
 	var bucketId uint64 = 1
 	for ; bucketId <= uint64(router.VshardCfg.BucketCount); bucketId += 500 {
@@ -84,15 +87,7 @@ func main() {
 		if _, err := router.RPC(bucketId, proc, []interface{}{101}); err != nil {
 			log.Printf("could not call remote proc '%s'\n%q", proc, err)
 		}
-		// cartridge enter srv-2
-		// function p1(a) local log = require('log') log.info("p1") log.info(a) end
 	}
-
-}
-
-func (r *Router) Print() {
-	log.Println(r.Routes)
-	log.Println()
 }
 
 func (r *Router) ReadConfig(configFilename string) error {
@@ -198,60 +193,38 @@ func (r *Router) DiscoveryBuckets() error {
 	return nil
 }
 
-func CreateBucketRoutingTableSync(replicasets *map[string]*tarantool.Connection) map[uint64]*tarantool.Connection {
-	// cartridge enter srv-2
-	// box.space._bucket.index.status:select("active", {limit=10})
-	// https://github.com/tarantool/cartridge-cli/blob/master/cli/commands/cartridge.go
-
-	var routing map[uint64]*tarantool.Connection = make(map[uint64]*tarantool.Connection)
-
-	for {
-		for _, conn := range *replicasets {
-			result, err := conn.Exec(
-				tarantool.Select("_bucket", "status", 0, uint32(getBucketCount(conn)), tarantool.IterEq, []interface{}{"active"}))
-			if err != nil {
-				log.Fatalf("fail to select active buckets\n%q", err)
-			}
-
-			for _, bucket := range result {
-
-				bucketId, ok := bucket.([]interface{})[0].(uint64)
-				if !ok {
-					_bucketId, ok := bucket.([]interface{})[0].(int64)
-					if !ok {
-						log.Fatalf("bucket_id_i not int64")
-					}
-					bucketId = uint64(_bucketId)
-				}
-
-				routing[bucketId] = conn
-			}
-		}
-		break
-	}
-
-	return routing
-}
-
-func Bootstrap(vshardCfgData *VshardConfig, replicasets *map[string]*tarantool.Connection) {
-
-	for replicasetUuid, conn := range *replicasets {
+func (r *Router) Bootstrap() error {
+	for replicasetUuid, conn := range r.Replicasets {
 		log.Printf("get bucket.count from %s", replicasetUuid)
 		bucketCount := getBucketCount(conn)
 		log.Printf("bucketCount = %d", bucketCount)
 		if bucketCount > 0 {
-			log.Fatalf("replicaset %s is already bootstrapped.", replicasetUuid)
+			return fmt.Errorf("replicaset %s is already bootstrapped.", replicasetUuid)
 		}
 	}
 
-	clusterCalculateEtalonBalance(vshardCfgData)
-	spew.Dump(vshardCfgData)
+	clusterCalculateEtalonBalance(&r.VshardCfg)
+	spew.Dump(r.VshardCfg)
 
 	var firstBucketId int = 1
-	for replicasetUuid, conn := range *replicasets {
-		bootstrapReplicaset(replicasetUuid, conn, firstBucketId, vshardCfgData.Sharding[replicasetUuid].EtalonBucketCount)
-		firstBucketId = firstBucketId + vshardCfgData.Sharding[replicasetUuid].EtalonBucketCount
+	for replicasetUuid, conn := range r.Replicasets {
+		etalonBucketCount := r.VshardCfg.Sharding[replicasetUuid].EtalonBucketCount
+		log.Printf("bootstrap replicaset %s firstBucketId=%d etalonBucketCount=%d", replicasetUuid, firstBucketId, etalonBucketCount)
+		cmd := "__vshard_storage_init.bucket_force_create"
+		result, err := conn.Exec(
+			tarantool.Call(cmd, []interface{}{firstBucketId, etalonBucketCount}))
+		if err != nil {
+			return fmt.Errorf("fail to %s\n%q", cmd, err)
+		}
+
+		if !result[0].(bool) {
+			return fmt.Errorf("fail to bootstrap replicaset %s", replicasetUuid)
+		}
+		log.Printf("replicaset %s bootstrapped!", replicasetUuid)
+
+		firstBucketId += etalonBucketCount
 	}
+	return nil
 }
 
 func connection(host string) (conn *tarantool.Connection, err error) {
@@ -294,21 +267,6 @@ func getBucketCount(conn *tarantool.Connection) (bucketCount int64) {
 	}
 
 	return bucketCount
-}
-
-func bootstrapReplicaset(replicasetUuid string, conn *tarantool.Connection, firstBucketId int, etalonBucketCount int) {
-	log.Printf("bootstrap replicaset %s firstBucketId=%d etalonBucketCount=%d", replicasetUuid, firstBucketId, etalonBucketCount)
-	cmd := "__vshard_storage_init.bucket_force_create"
-	result, err := conn.Exec(
-		tarantool.Call(cmd, []interface{}{firstBucketId, etalonBucketCount}))
-	if err != nil {
-		log.Fatalf("fail to %s\n%q", cmd, err)
-	}
-
-	if !result[0].(bool) {
-		log.Fatalf("fail to bootstrap replicaset %s", replicasetUuid)
-	}
-	log.Printf("replicaset %s bootstrapped!", replicasetUuid)
 }
 
 func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) {
