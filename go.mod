@@ -1,4 +1,4 @@
-module vasya
+module tarapower
 
 go 1.17
 

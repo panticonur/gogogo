@@ -89,7 +89,7 @@ func (r *Router) ConnectMasterInstancies() error {
 					return fmt.Errorf("could not parse URI %s\n%v", replica.Uri, err)
 				}
 
-				conn, err := connection(u.Host)
+				conn, err := Connection(u.Host)
 				if err != nil {
 					return fmt.Errorf("could not connect to %s\n%v", u.Host, err)
 				}
@@ -103,7 +103,7 @@ func (r *Router) ConnectMasterInstancies() error {
 	return nil
 }
 
-func connection(host string) (conn *tarantool.Connection, err error) {
+func Connection(host string) (conn *tarantool.Connection, err error) {
 	log.Println("connecting to " + host)
 	opts := tarantool.Opts{
 		RequestTimeout: 500 * time.Millisecond,

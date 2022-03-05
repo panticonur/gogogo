@@ -5,6 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"tarapower/router"
+
 	"github.com/FZambia/tarantool"
 	"github.com/davecgh/go-spew/spew"
 )
@@ -28,7 +30,7 @@ func run(command *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatalf("could not load param tarantool-addr\n%v", err)
 	}
-	conn, err := router.connection(tarantool_addr)
+	conn, err := router.Connection(tarantool_addr)
 	if err != nil {
 		log.Fatalf("connection fail\n%v", err)
 	}
