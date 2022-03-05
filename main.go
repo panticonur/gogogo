@@ -2,13 +2,10 @@ package main
 
 import (
 	"log"
-
-	"github.com/spf13/cobra"
-
 	"tarapower/router"
 
-	"github.com/FZambia/tarantool"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/spf13/cobra"
 )
 
 func run(command *cobra.Command, args []string) {
@@ -30,15 +27,10 @@ func run(command *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatalf("could not load param tarantool-addr\n%v", err)
 	}
-	conn, err := router.Connection(tarantool_addr)
+
+	cfg, err := router.GetConfig(tarantool_addr)
 	if err != nil {
-		log.Fatalf("connection fail\n%v", err)
-	}
-	cmd := "cartridge_vshard_get_config"
-	cfg, err := conn.Exec(
-		tarantool.Call(cmd, []interface{}{}))
-	if err != nil {
-		log.Fatalf("fail to load vshard cfg %s\n%v", cmd, err)
+		log.Fatalf("get config fail\n%v", err)
 	}
 	spew.Dump(cfg)
 
@@ -64,5 +56,4 @@ func main() {
 	var rootCmd = &cobra.Command{Use: "tarapower", Run: run}
 	rootCmd.Flags().StringP("tarantool-addr", "t", "127.0.0.1:3301", "use this param to connect to tarapower")
 	rootCmd.Execute()
-
 }

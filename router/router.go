@@ -120,13 +120,13 @@ func Connection(host string) (conn *tarantool.Connection, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not init vshard storage %s\n%v", host, err)
 	}
-	/*
-		_, err = conn.Exec(
-			tarantool.Eval("__lua_api_vshard = require('cartridge.lua-api.vshard')", []interface{}{}))
-		if err != nil {
-			return nil, fmt.Errorf("could not load vshard api %s\n%v", host, err)
-		}
-	*/
+
+	_, err = conn.Exec(
+		tarantool.Eval("__lua_api_vshard = require('cartridge.lua-api.vshard')", []interface{}{}))
+	if err != nil {
+		return nil, fmt.Errorf("could not load vshard api %s\n%v", host, err)
+	}
+
 	log.Println(host + " connected!")
 	return conn, nil
 }
@@ -331,4 +331,20 @@ func clusterCalculateEtalonBalance(vshardCfg *VshardConfig) error {
 		}
 	}
 	return nil
+}
+
+func GetConfig(hostAddr string) (cfg []interface{}, err error) {
+	conn, err := Connection(hostAddr)
+	if err != nil {
+		return nil, fmt.Errorf("could not connect to %s\n%v", hostAddr, err)
+	}
+
+	cmd := "__lua_api_vshard.get_config"
+	cfg, err = conn.Exec(
+		tarantool.Call(cmd, []interface{}{}))
+	if err != nil {
+		return cfg, fmt.Errorf("fail to load vshard cfg by calling %s\n%v", cmd, err)
+	}
+
+	return cfg, nil
 }
