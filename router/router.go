@@ -51,8 +51,6 @@ type VshardConfig struct {
 	Sharding                      map[string]Replicaset
 }
 
-var VshardConfigFilename = "/tmp/vshard_cfg.yaml"
-
 type Router struct {
 	Replicasets map[string]*tarantool.Connection
 	Routes      sync.Map
