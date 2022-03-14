@@ -1,5 +1,5 @@
 diff --git a/cartridge/roles/vshard-router.lua b/cartridge/roles/vshard-router.lua
-index b213c2d..ace49ae 100644
+index b213c2d..b3836d7 100644
 --- a/cartridge/roles/vshard-router.lua
 +++ b/cartridge/roles/vshard-router.lua
 @@ -2,7 +2,7 @@ local log = require('log')
@@ -19,7 +19,7 @@ index b213c2d..ace49ae 100644
 +    log.warn('save_to_yaml ' .. filename)
 +    local yaml_data = yaml.encode(native_data)
 +    log.info(yaml_data)
-+    local ok, err = file_write(
++    local ok, err = utils.file_write(
 +        filename, yaml_data,
 +        {'O_CREAT',  'O_WRONLY'}
 +    )
@@ -27,7 +27,7 @@ index b213c2d..ace49ae 100644
 +        log.error(err)
 +        return false
 +    end
-+    if not file_exists(filename) then
++    if not utils.file_exists(filename) then
 +        log.error(filename .. ' not exist!')
 +        return false
 +    end

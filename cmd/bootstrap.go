@@ -57,7 +57,7 @@ func bootstrapFromFile(configFile string) {
 		Replicasets: make(map[string]*tarantool.Connection),
 	}
 
-	if err := r.ReadConfig(configFile); err != nil {
+	if err := r.ReadConfigFile(configFile); err != nil {
 		log.Fatalf("error reading '%s' vshard config\n%v", configFile, err)
 	}
 	if err := r.ConnectMasterInstancies(); err != nil {

@@ -65,7 +65,7 @@ type Router struct {
 // go to storage instance and call:
 // vshard.storage.internal.current_cfg
 
-func (r *Router) ReadConfig(configFilename string) error {
+func (r *Router) ReadConfigFile(configFilename string) error {
 	log.Printf("read vshard cfg yaml file %s", configFilename)
 	yamlFile, err := ioutil.ReadFile(configFilename)
 	if err != nil {
