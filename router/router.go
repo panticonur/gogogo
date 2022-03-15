@@ -53,7 +53,8 @@ type VshardConfig struct {
 
 type Router struct {
 	Replicasets map[string]*tarantool.Connection
-	Routes      sync.Map
+	Routes      sync.Map // bucketId uint64: conn *tarantool.Connection
+	Groups      sync.Map // group string: bucketId uint6
 	VshardCfg   VshardConfig
 }
 
@@ -151,6 +152,7 @@ func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) (retVal [
 	return retVal, nil
 }
 
+/*
 func (r *Router) DiscoveryBuckets() error {
 	var wg sync.WaitGroup
 
@@ -194,7 +196,7 @@ func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
 		}
 	}
 }
-
+*/
 func (r *Router) Bootstrap() error {
 	for replicasetUuid, conn := range r.Replicasets {
 		log.Printf("get bucket.count from %s", replicasetUuid)
@@ -345,4 +347,68 @@ func GetConfig(hostAddr string) (cfg []interface{}, err error) {
 	}
 
 	return cfg, nil
+}
+
+type readBucketHook func(uint64, string, *tarantool.Connection)
+
+func (r *Router) activeBucketHook(bucketId uint64, status string, conn *tarantool.Connection) {
+	if status == "active" || status == "pinned" {
+		r.Routes.Store(bucketId, conn)
+	}
+}
+
+func (r *Router) groupBucketHook(bucketId uint64, status string, conn *tarantool.Connection) {
+	r.Groups.Store(bucketId, status)
+	log.Printf("%d %s", bucketId, status)
+}
+
+func (r *Router) readBuckets(conn *tarantool.Connection, wg *sync.WaitGroup, hook readBucketHook) {
+	defer wg.Done()
+	var lastBucketId uint64 = 0
+	for c := 0; c < 2000; c++ {
+		result, err := conn.Exec(
+			tarantool.Select("_bucket", "pk", 0, 1000, tarantool.IterGt, []interface{}{lastBucketId}))
+		if err != nil {
+			log.Printf("fail to select buckets\n%v", err)
+		}
+		if len(result) == 0 {
+			break
+		}
+		for _, bucket := range result {
+			bucketId, ok := bucket.([]interface{})[0].(uint64)
+			if !ok {
+				_bucketId, ok := bucket.([]interface{})[0].(int64)
+				if !ok {
+					log.Printf("could not cast bucketID to int64 and uint64")
+					continue
+				}
+				bucketId = uint64(_bucketId)
+			}
+			status := bucket.([]interface{})[1].(string)
+			//log.Printf("%d %s", bucketId, status)
+			hook(bucketId, status, conn)
+			lastBucketId = bucketId
+		}
+	}
+}
+
+func (r *Router) discoveryBuckets(hook readBucketHook) error {
+	var wg sync.WaitGroup
+
+	log.Println("start async tasks")
+	for _, conn := range r.Replicasets {
+		wg.Add(1)
+		go r.readBuckets(conn, &wg, hook)
+	}
+
+	wg.Wait()
+	return nil
+}
+
+func (r *Router) CreateRoutesTable() {
+	r.discoveryBuckets(r.activeBucketHook)
+}
+
+func (r *Router) CreateSortesBucketTable() {
+	r.discoveryBuckets(r.groupBucketHook)
 }

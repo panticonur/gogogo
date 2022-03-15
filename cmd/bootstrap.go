@@ -69,7 +69,14 @@ func bootstrapFromFile(configFile string) {
 		log.Fatalf("bootstap error\n%v", err)
 	}
 
-	r.DiscoveryBuckets()
+	r.CreateRoutesTable()
+
+	r.Routes.Range(func(b, c interface{}) bool {
+		bucketId := b.(uint64)
+		conn := c.(*tarantool.Connection)
+		log.Printf("%d %p", bucketId, conn)
+		return true
+	})
 	/*
 		var bucketId uint64 = 1
 		for ; bucketId <= uint64(router.VshardCfg.BucketCount); bucketId += 500 {
