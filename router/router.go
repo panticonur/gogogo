@@ -54,7 +54,7 @@ type VshardConfig struct {
 type Router struct {
 	Replicasets map[string]*tarantool.Connection
 	Routes      sync.Map // bucketId uint64: conn *tarantool.Connection
-	Groups      sync.Map // group string: bucketId uint6
+	Groups      sync.Map // group string: bucketId uint6 // group string : [bucketId uint6]
 	VshardCfg   VshardConfig
 }
 
@@ -357,9 +357,20 @@ func (r *Router) activeBucketHook(bucketId uint64, status string, conn *tarantoo
 	}
 }
 
+var mu = sync.Mutex{}
+
 func (r *Router) groupBucketHook(bucketId uint64, status string, conn *tarantool.Connection) {
-	r.Groups.Store(bucketId, status)
-	log.Printf("%d %s", bucketId, status)
+	mu.Lock()
+	v, loaded := r.Groups.Load(status)
+	var vector = []uint64{}
+	if !loaded {
+		vector = make([]uint64, 0)
+	} else {
+		vector = v.([]uint64)
+	}
+	vector = append(vector, bucketId)
+	r.Groups.Store(status, vector)
+	mu.Unlock()
 }
 
 func (r *Router) readBuckets(conn *tarantool.Connection, wg *sync.WaitGroup, hook readBucketHook) {

@@ -9,6 +9,7 @@ import (
 	"tarapower/router"
 
 	"github.com/FZambia/tarantool"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/spf13/cobra"
 )
 
@@ -48,10 +49,11 @@ func scanBuckets() {
 
 	r.CreateSortesBucketTable()
 
-	r.Groups.Range(func(b, g interface{}) bool {
-		bucketId := b.(uint64)
-		group := g.(string)
-		log.Printf("%d %s", bucketId, group)
+	r.Groups.Range(func(s, bs interface{}) bool {
+		status := s.(string)
+		vector := bs.([]uint64)
+		log.Printf("%s", status)
+		spew.Dump(vector)
 		return true
 	})
 }
