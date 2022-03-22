@@ -17,7 +17,8 @@ import (
 var scanBucketsCmd = &cobra.Command{
 	Use:   "scanBuckets",
 	Short: "A brief description of your command",
-	Long: `- зайти на все стораджа:
+	Long: `
+- зайти на все стораджа:
 	- посчитать все бакеты
 	- рассортировать бакеты по статусам
 	- вывести пользователю`,

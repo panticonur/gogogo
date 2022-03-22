@@ -51,10 +51,26 @@ type VshardConfig struct {
 	Sharding                      map[string]Replicaset
 }
 
+type Index struct {
+	ID   uint64
+	Name string
+}
+
+type Space struct {
+	ID      uint64
+	Name    string
+	Indexes []Index
+}
+
+type Instance struct {
+	Spaces sync.Map // id uint64: Space
+}
+
 type Router struct {
 	Replicasets map[string]*tarantool.Connection
 	Routes      sync.Map // bucketId uint64: conn *tarantool.Connection
-	Groups      sync.Map // group string: bucketId uint6 // group string : [bucketId uint6]
+	Groups      sync.Map // group string: [bucketId uint6]
+	Spaces      sync.Map // id uint64: Space
 	VshardCfg   VshardConfig
 }
 
@@ -152,51 +168,6 @@ func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) (retVal [
 	return retVal, nil
 }
 
-/*
-func (r *Router) DiscoveryBuckets() error {
-	var wg sync.WaitGroup
-
-	log.Println("start async tasks")
-	for _, conn := range r.Replicasets {
-		wg.Add(1)
-		go r.ReadBuckets(conn, &wg)
-	}
-
-	wg.Wait()
-	return nil
-}
-
-func (r *Router) ReadBuckets(conn *tarantool.Connection, wg *sync.WaitGroup) {
-	defer wg.Done()
-	var lastBucketId uint64 = 0
-	for c := 0; c < 2000; c++ {
-		result, err := conn.Exec(
-			tarantool.Select("_bucket", "pk", 0, 1000, tarantool.IterGt, []interface{}{lastBucketId}))
-		if err != nil {
-			log.Printf("fail to select active buckets\n%v", err)
-		}
-		if len(result) == 0 {
-			break
-		}
-
-		for _, bucket := range result {
-			bucketId, ok := bucket.([]interface{})[0].(uint64)
-			if !ok {
-				_bucketId, ok := bucket.([]interface{})[0].(int64)
-				if !ok {
-					log.Printf("could not cast bucket[0] to int64 and uint64")
-					continue
-				}
-				bucketId = uint64(_bucketId)
-			}
-			if st := bucket.([]interface{})[1].(string); st == "active" || st == "pinned" {
-				r.Routes.Store(bucketId, conn)
-			}
-			lastBucketId = bucketId
-		}
-	}
-}
-*/
 func (r *Router) Bootstrap() error {
 	for replicasetUuid, conn := range r.Replicasets {
 		log.Printf("get bucket.count from %s", replicasetUuid)
@@ -422,4 +393,70 @@ func (r *Router) CreateRoutesTable() {
 
 func (r *Router) CreateSortesBucketTable() {
 	r.discoveryBuckets(r.groupBucketHook)
+}
+
+func (r *Router) CreateSpacesTable() error {
+	for replicasetUuid, conn := range r.Replicasets {
+		log.Println("\n\n=================")
+		log.Printf(conn.NetConn().RemoteAddr().String())
+		log.Printf("replicaset Uuid = %s\n\n", replicasetUuid)
+		for spaceName, space := range conn.Schema().Spaces {
+			log.Printf("  space name = '%s'  id = %d\n", spaceName, space.ID)
+			for indexName, index := range space.Indexes {
+				log.Printf("    index = '%s'  id = %d\n", indexName, index.ID)
+			}
+		}
+
+		var lastId uint64 = 0
+		for bulk := 0; bulk < 777; bulk++ {
+			// see tarantool.loadSchema() 66
+			resp, err := conn.Exec(
+				tarantool.Select("_space", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
+			if err != nil {
+				return fmt.Errorf("fail to select spaces\n%v", err)
+			}
+			if len(resp) == 0 {
+				break
+			}
+			for _, row := range resp {
+				row := row.([]interface{})
+				var space Space
+				space.ID = row[0].(uint64)
+				space.Name = row[2].(string)
+				lastId = space.ID
+				r.Spaces.Store(space.ID, space)
+			}
+		}
+
+		lastId = 0
+		for bulk := 0; bulk < 777; bulk++ {
+			// see tarantool.loadSchema() 121
+			resp, err := conn.Exec(
+				tarantool.Select("_index", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
+			if err != nil {
+				return fmt.Errorf("fail to select indexes\n%v", err)
+			}
+			if len(resp) == 0 {
+				break
+			}
+			for _, row := range resp {
+				row := row.([]interface{})
+				var index Index
+				index.ID = uint64(row[1].(int64))
+				index.Name = row[2].(string)
+				spaceID := row[0].(uint64)
+				lastId = spaceID
+
+				s, loaded := r.Spaces.Load(spaceID)
+				if !loaded {
+					return fmt.Errorf("fail to load space %d\n%v", spaceID, err)
+				} else {
+					space := s.(Space)
+					space.Indexes = append(space.Indexes, index)
+					r.Spaces.Store(space.ID, space)
+				}
+			}
+		}
+	}
+	return nil
 }
