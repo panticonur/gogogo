@@ -63,7 +63,10 @@ type Space struct {
 }
 
 type Instance struct {
-	Spaces sync.Map // id uint64: Space
+	Host   string
+	UUID   string
+	Conn   *tarantool.Connection
+	Spaces map[uint64]Space
 }
 
 type Router struct {
@@ -71,6 +74,7 @@ type Router struct {
 	Routes      sync.Map // bucketId uint64: conn *tarantool.Connection
 	Groups      sync.Map // group string: [bucketId uint6]
 	Spaces      sync.Map // id uint64: Space
+	Instancies  map[string]Instance
 	VshardCfg   VshardConfig
 }
 
@@ -110,6 +114,13 @@ func (r *Router) ConnectMasterInstancies() error {
 				}
 
 				r.Replicasets[replicasetUuid] = conn
+				var instance Instance
+				instance.Host = u.Host
+				instance.UUID = replicasetUuid
+				instance.Conn = conn
+				instance.Spaces = make(map[uint64]Space)
+				r.Instancies[replicasetUuid] = instance
+
 				log.Printf("append replicaset %s, master %s", replicasetUuid, u.Host)
 				break
 			}
@@ -395,7 +406,75 @@ func (r *Router) CreateSortesBucketTable() {
 	r.discoveryBuckets(r.groupBucketHook)
 }
 
-func (r *Router) CreateSpacesTable() error {
+func (r *Router) CreateSpacesTable() {
+	var wg sync.WaitGroup
+
+	log.Println("start async tasks")
+	for _, instance := range r.Instancies {
+		wg.Add(1)
+		go r.readSpacesAndIndexes(instance, &wg)
+	}
+
+	wg.Wait()
+}
+
+func (r *Router) readSpacesAndIndexes(instance Instance, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	var lastId uint64 = 0
+	for bulk := 0; bulk < 777; bulk++ {
+		// see tarantool.loadSchema() 66
+		resp, err := instance.Conn.Exec(
+			tarantool.Select("_space", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
+		if err != nil {
+			log.Printf("fail to select spaces\n%v", err)
+			break
+		}
+		if len(resp) == 0 {
+			break
+		}
+		for _, row := range resp {
+			row := row.([]interface{})
+			var space Space
+			//var space = new(Space)
+			space.ID = row[0].(uint64)
+			space.Name = row[2].(string)
+			lastId = space.ID
+			instance.Spaces[space.ID] = space
+		}
+	}
+
+	lastId = 0
+	for bulk := 0; bulk < 777; bulk++ {
+		// see tarantool.loadSchema() 121
+		resp, err := instance.Conn.Exec(
+			tarantool.Select("_index", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
+		if err != nil {
+			log.Printf("fail to select indexes\n%v", err)
+			break
+		}
+		if len(resp) == 0 {
+			break
+		}
+		for _, row := range resp {
+			row := row.([]interface{})
+			var index Index
+			index.ID = uint64(row[1].(int64))
+			index.Name = row[2].(string)
+			spaceID := row[0].(uint64)
+			lastId = spaceID
+			space, loaded := instance.Spaces[spaceID]
+			if !loaded {
+				log.Printf("fail to load space %d", spaceID)
+			} else {
+				space.Indexes = append(space.Indexes, index)
+				instance.Spaces[spaceID] = space
+			}
+		}
+	}
+}
+
+func (r *Router) CreateSpacesTable_sync() error {
 	for replicasetUuid, conn := range r.Replicasets {
 		log.Println("\n\n=================")
 		log.Printf(conn.NetConn().RemoteAddr().String())

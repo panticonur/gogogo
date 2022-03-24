@@ -37,6 +37,7 @@ func init() {
 func showSpaces() {
 	r := router.Router{
 		Replicasets: make(map[string]*tarantool.Connection),
+		Instancies:  make(map[string]router.Instance),
 	}
 	var configFile = "/tmp/vshard_cfg.yaml"
 	if err := r.ReadConfigFile(configFile); err != nil {
@@ -51,17 +52,28 @@ func showSpaces() {
 	//	log.Fatalf("scan error\n%v", err)
 	//}
 
+	/*
+		r.CreateSpacesTable_sync()
+		log.Println("\n\nSpaces Table:")
+		r.Spaces.Range(func(i, s interface{}) bool {
+			spaceID := i.(uint64)
+			space := s.(router.Space)
+			log.Printf("  space name = '%s'  id = %d\n", space.Name, spaceID)
+			for _, index := range space.Indexes {
+				log.Printf("    index = '%s'  id = %d\n", index.Name, index.ID)
+			}
+			return true
+		})
+	*/
 	r.CreateSpacesTable()
-
 	log.Println("\n\nSpaces Table:")
-
-	r.Spaces.Range(func(i, s interface{}) bool {
-		spaceID := i.(uint64)
-		space := s.(router.Space)
-		log.Printf("  space name = '%s'  id = %d\n", space.Name, spaceID)
-		for _, index := range space.Indexes {
-			log.Printf("    index = '%s'  id = %d\n", index.Name, index.ID)
+	for uuid, instance := range r.Instancies {
+		log.Printf("instance name = '%s'  host = %s\n", uuid, instance.Host)
+		for spaceID, space := range instance.Spaces {
+			log.Printf("  space name = '%s'  id = %d\n", space.Name, spaceID)
+			for _, index := range space.Indexes {
+				log.Printf("    index = '%s'  id = %d\n", index.Name, index.ID)
+			}
 		}
-		return true
-	})
+	}
 }
