@@ -341,7 +341,7 @@ func (r *Router) activeBucketHook(bucketId uint64, status string, conn *tarantoo
 
 var mu = sync.Mutex{}
 
-func (r *Router) groupingBucketsHook(bucketId uint64, status string, conn *tarantool.Connection) {
+func (r *Router) sortedBucketsHook(bucketId uint64, status string, conn *tarantool.Connection) {
 	mu.Lock()
 	v, loaded := r.Groups.Load(status)
 	var vector = []uint64{}
@@ -395,7 +395,7 @@ func (r *Router) CreateRoutesTable() {
 }
 
 func (r *Router) CreateSortesBucketTable() {
-	r.discoveryBuckets(r.groupingBucketsHook)
+	r.discoveryBuckets(r.sortedBucketsHook)
 }
 
 func (r *Router) CreateSpacesTable() {
