@@ -9,7 +9,6 @@ import (
 	"log"
 	"tarapower/router"
 
-	"github.com/FZambia/tarantool"
 	"github.com/spf13/cobra"
 )
 
@@ -36,8 +35,8 @@ func init() {
 
 func showSpaces() {
 	r := router.Router{
-		Replicasets: make(map[string]*tarantool.Connection),
-		Instancies:  make(map[string]router.Instance),
+		//Replicasets: make(map[string]*tarantool.Connection),
+		Replicasets: make(map[string]router.Instance),
 	}
 	var configFile = "/tmp/vshard_cfg.yaml"
 	if err := r.ReadConfigFile(configFile); err != nil {
@@ -67,7 +66,7 @@ func showSpaces() {
 	*/
 	r.CreateSpacesTable()
 	log.Println("\n\nSpaces Table:")
-	for uuid, instance := range r.Instancies {
+	for uuid, instance := range r.Replicasets {
 		log.Printf("instance name = '%s'  host = %s\n", uuid, instance.Host)
 		for spaceID, space := range instance.Spaces {
 			log.Printf("  space name = '%s'  id = %d\n", space.Name, spaceID)

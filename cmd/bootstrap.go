@@ -54,7 +54,8 @@ func init() {
 
 func bootstrapFromFile(configFile string) {
 	r := router.Router{
-		Replicasets: make(map[string]*tarantool.Connection),
+		//Replicasets: make(map[string]*tarantool.Connection),
+		Replicasets: make(map[string]router.Instance),
 	}
 
 	if err := r.ReadConfigFile(configFile); err != nil {

@@ -8,7 +8,6 @@ import (
 	"log"
 	"tarapower/router"
 
-	"github.com/FZambia/tarantool"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/spf13/cobra"
 )
@@ -33,7 +32,8 @@ func init() {
 
 func scanBuckets() {
 	r := router.Router{
-		Replicasets: make(map[string]*tarantool.Connection),
+		//Replicasets: make(map[string]*tarantool.Connection),
+		Replicasets: make(map[string]router.Instance),
 	}
 	var configFile = "/tmp/vshard_cfg.yaml"
 	if err := r.ReadConfigFile(configFile); err != nil {

@@ -70,11 +70,11 @@ type Instance struct {
 }
 
 type Router struct {
-	Replicasets map[string]*tarantool.Connection
+	//Replicasets map[string]*tarantool.Connection
 	Routes      sync.Map // bucketId uint64: conn *tarantool.Connection
 	Groups      sync.Map // group string: [bucketId uint6]
 	Spaces      sync.Map // id uint64: Space
-	Instancies  map[string]Instance
+	Replicasets map[string]Instance
 	VshardCfg   VshardConfig
 }
 
@@ -113,13 +113,13 @@ func (r *Router) ConnectMasterInstancies() error {
 					return fmt.Errorf("could not connect to %s\n%v", u.Host, err)
 				}
 
-				r.Replicasets[replicasetUuid] = conn
+				//r.Replicasets[replicasetUuid] = conn
 				var instance Instance
 				instance.Host = u.Host
 				instance.UUID = replicasetUuid
 				instance.Conn = conn
 				instance.Spaces = make(map[uint64]Space)
-				r.Instancies[replicasetUuid] = instance
+				r.Replicasets[replicasetUuid] = instance
 
 				log.Printf("append replicaset %s, master %s", replicasetUuid, u.Host)
 				break
@@ -158,8 +158,8 @@ func Connection(host string) (conn *tarantool.Connection, err error) {
 }
 
 func (r *Router) CloseConnections() {
-	for replicasetUuid, conn := range r.Replicasets {
-		conn.Close()
+	for replicasetUuid, instance := range r.Replicasets {
+		instance.Conn.Close()
 		log.Printf("close connection replicaset %s", replicasetUuid)
 	}
 }
@@ -180,9 +180,9 @@ func (r *Router) RPC(bucketId uint64, proc string, args []interface{}) (retVal [
 }
 
 func (r *Router) Bootstrap() error {
-	for replicasetUuid, conn := range r.Replicasets {
+	for replicasetUuid, instance := range r.Replicasets {
 		log.Printf("get bucket.count from %s", replicasetUuid)
-		bucketCount, err := getBucketCount(conn)
+		bucketCount, err := getBucketCount(instance.Conn)
 		if err != nil {
 			return fmt.Errorf("fail to get bucket count %s\n%v", replicasetUuid, err)
 		}
@@ -196,11 +196,11 @@ func (r *Router) Bootstrap() error {
 	spew.Dump(r.VshardCfg)
 
 	var firstBucketId int = 1
-	for replicasetUuid, conn := range r.Replicasets {
+	for replicasetUuid, instance := range r.Replicasets {
 		etalonBucketCount := r.VshardCfg.Sharding[replicasetUuid].EtalonBucketCount
 		log.Printf("bootstrap replicaset %s firstBucketId=%d etalonBucketCount=%d", replicasetUuid, firstBucketId, etalonBucketCount)
 		cmd := "__vshard_storage_init.bucket_force_create"
-		result, err := conn.Exec(
+		result, err := instance.Conn.Exec(
 			tarantool.Call(cmd, []interface{}{firstBucketId, etalonBucketCount}))
 		if err != nil {
 			return fmt.Errorf("fail to %s\n%v", cmd, err)
@@ -341,7 +341,7 @@ func (r *Router) activeBucketHook(bucketId uint64, status string, conn *tarantoo
 
 var mu = sync.Mutex{}
 
-func (r *Router) groupBucketHook(bucketId uint64, status string, conn *tarantool.Connection) {
+func (r *Router) groupingBucketsHook(bucketId uint64, status string, conn *tarantool.Connection) {
 	mu.Lock()
 	v, loaded := r.Groups.Load(status)
 	var vector = []uint64{}
@@ -357,17 +357,9 @@ func (r *Router) groupBucketHook(bucketId uint64, status string, conn *tarantool
 
 func (r *Router) readBuckets(conn *tarantool.Connection, wg *sync.WaitGroup, hook readBucketHook) {
 	defer wg.Done()
-	var lastBucketId uint64 = 0
-	for c := 0; c < 2000; c++ {
-		result, err := conn.Exec(
-			tarantool.Select("_bucket", "pk", 0, 1000, tarantool.IterGt, []interface{}{lastBucketId}))
-		if err != nil {
-			log.Printf("fail to select buckets\n%v", err)
-		}
-		if len(result) == 0 {
-			break
-		}
-		for _, bucket := range result {
+	r.bulkSelect("_bucket", "pk", 0, 1000, conn, func(dataResponse []interface{}) uint64 {
+		var lastId uint64 = 0
+		for _, bucket := range dataResponse {
 			bucketId, ok := bucket.([]interface{})[0].(uint64)
 			if !ok {
 				_bucketId, ok := bucket.([]interface{})[0].(int64)
@@ -380,22 +372,22 @@ func (r *Router) readBuckets(conn *tarantool.Connection, wg *sync.WaitGroup, hoo
 			status := bucket.([]interface{})[1].(string)
 			//log.Printf("%d %s", bucketId, status)
 			hook(bucketId, status, conn)
-			lastBucketId = bucketId
+			lastId = bucketId
 		}
-	}
+		return lastId
+	})
 }
 
-func (r *Router) discoveryBuckets(hook readBucketHook) error {
+func (r *Router) discoveryBuckets(hook readBucketHook) {
 	var wg sync.WaitGroup
 
 	log.Println("start async tasks")
-	for _, conn := range r.Replicasets {
+	for _, instance := range r.Replicasets {
 		wg.Add(1)
-		go r.readBuckets(conn, &wg, hook)
+		go r.readBuckets(instance.Conn, &wg, hook)
 	}
 
 	wg.Wait()
-	return nil
 }
 
 func (r *Router) CreateRoutesTable() {
@@ -403,14 +395,14 @@ func (r *Router) CreateRoutesTable() {
 }
 
 func (r *Router) CreateSortesBucketTable() {
-	r.discoveryBuckets(r.groupBucketHook)
+	r.discoveryBuckets(r.groupingBucketsHook)
 }
 
 func (r *Router) CreateSpacesTable() {
 	var wg sync.WaitGroup
 
 	log.Println("start async tasks")
-	for _, instance := range r.Instancies {
+	for _, instance := range r.Replicasets {
 		wg.Add(1)
 		go r.readSpacesAndIndexes(instance, &wg)
 	}
@@ -418,45 +410,45 @@ func (r *Router) CreateSpacesTable() {
 	wg.Wait()
 }
 
-func (r *Router) readSpacesAndIndexes(instance Instance, wg *sync.WaitGroup) {
-	defer wg.Done()
+type bulkSelectHook func([]interface{}) uint64
 
+func (r *Router) bulkSelect(space, index interface{}, offset, limit uint32, conn *tarantool.Connection, hook bulkSelectHook) {
 	var lastId uint64 = 0
 	for bulk := 0; bulk < 777; bulk++ {
-		// see tarantool.loadSchema() 66
-		resp, err := instance.Conn.Exec(
-			tarantool.Select("_space", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
+		resp, err := conn.Exec(
+			tarantool.Select(space, index, offset, limit, tarantool.IterGt, []interface{}{lastId}))
 		if err != nil {
-			log.Printf("fail to select spaces\n%v", err)
+			log.Printf("fail to select %s\n%v", space, err)
 			break
 		}
 		if len(resp) == 0 {
 			break
 		}
-		for _, row := range resp {
+		lastId = hook(resp)
+	}
+}
+
+func (r *Router) readSpacesAndIndexes(instance Instance, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// see tarantool.loadSchema() 66
+	r.bulkSelect("_space", 0, 0, 100, instance.Conn, func(dataResponse []interface{}) uint64 {
+		var lastId uint64 = 0
+		for _, row := range dataResponse {
 			row := row.([]interface{})
 			var space Space
-			//var space = new(Space)
 			space.ID = row[0].(uint64)
 			space.Name = row[2].(string)
 			lastId = space.ID
 			instance.Spaces[space.ID] = space
 		}
-	}
+		return lastId
+	})
 
-	lastId = 0
-	for bulk := 0; bulk < 777; bulk++ {
-		// see tarantool.loadSchema() 121
-		resp, err := instance.Conn.Exec(
-			tarantool.Select("_index", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
-		if err != nil {
-			log.Printf("fail to select indexes\n%v", err)
-			break
-		}
-		if len(resp) == 0 {
-			break
-		}
-		for _, row := range resp {
+	// see tarantool.loadSchema() 121
+	r.bulkSelect("_index", 0, 0, 100, instance.Conn, func(dataResponse []interface{}) uint64 {
+		var lastId uint64 = 0
+		for _, row := range dataResponse {
 			row := row.([]interface{})
 			var index Index
 			index.ID = uint64(row[1].(int64))
@@ -471,15 +463,16 @@ func (r *Router) readSpacesAndIndexes(instance Instance, wg *sync.WaitGroup) {
 				instance.Spaces[spaceID] = space
 			}
 		}
-	}
+		return lastId
+	})
 }
 
 func (r *Router) CreateSpacesTable_sync() error {
-	for replicasetUuid, conn := range r.Replicasets {
+	for replicasetUuid, instance := range r.Replicasets {
 		log.Println("\n\n=================")
-		log.Printf(conn.NetConn().RemoteAddr().String())
+		log.Printf(instance.Conn.NetConn().RemoteAddr().String())
 		log.Printf("replicaset Uuid = %s\n\n", replicasetUuid)
-		for spaceName, space := range conn.Schema().Spaces {
+		for spaceName, space := range instance.Conn.Schema().Spaces {
 			log.Printf("  space name = '%s'  id = %d\n", spaceName, space.ID)
 			for indexName, index := range space.Indexes {
 				log.Printf("    index = '%s'  id = %d\n", indexName, index.ID)
@@ -489,7 +482,7 @@ func (r *Router) CreateSpacesTable_sync() error {
 		var lastId uint64 = 0
 		for bulk := 0; bulk < 777; bulk++ {
 			// see tarantool.loadSchema() 66
-			resp, err := conn.Exec(
+			resp, err := instance.Conn.Exec(
 				tarantool.Select("_space", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
 			if err != nil {
 				return fmt.Errorf("fail to select spaces\n%v", err)
@@ -510,7 +503,7 @@ func (r *Router) CreateSpacesTable_sync() error {
 		lastId = 0
 		for bulk := 0; bulk < 777; bulk++ {
 			// see tarantool.loadSchema() 121
-			resp, err := conn.Exec(
+			resp, err := instance.Conn.Exec(
 				tarantool.Select("_index", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
 			if err != nil {
 				return fmt.Errorf("fail to select indexes\n%v", err)
