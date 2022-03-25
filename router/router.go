@@ -72,7 +72,7 @@ type MasterInstance struct {
 type Router struct {
 	//Replicasets map[string]*tarantool.Connection
 	Routes      sync.Map // bucketId uint64: conn *tarantool.Connection
-	Groups      sync.Map // group string: [bucketId uint6]
+	Groups      sync.Map // group string: bucketId []uint64
 	Replicasets map[string]MasterInstance
 	VshardCfg   VshardConfig
 }
@@ -112,7 +112,6 @@ func (r *Router) ConnectMasterInstancies() error {
 					return fmt.Errorf("could not connect to %s\n%v", u.Host, err)
 				}
 
-				//r.Replicasets[replicasetUuid] = conn
 				var instance MasterInstance
 				instance.Host = u.Host
 				instance.UUID = replicasetUuid
@@ -338,10 +337,10 @@ func (r *Router) activeBucketHook(bucketId uint64, status string, conn *tarantoo
 	}
 }
 
-var mu = sync.Mutex{}
+var mutex = sync.Mutex{}
 
 func (r *Router) sortedBucketsHook(bucketId uint64, status string, conn *tarantool.Connection) {
-	mu.Lock()
+	mutex.Lock()
 	v, loaded := r.Groups.Load(status)
 	var vector = []uint64{}
 	if !loaded {
@@ -351,7 +350,7 @@ func (r *Router) sortedBucketsHook(bucketId uint64, status string, conn *taranto
 	}
 	vector = append(vector, bucketId)
 	r.Groups.Store(status, vector)
-	mu.Unlock()
+	mutex.Unlock()
 }
 
 func (r *Router) readBuckets(conn *tarantool.Connection, wg *sync.WaitGroup, hook readBucketHook) {

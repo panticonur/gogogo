@@ -8,7 +8,6 @@ import (
 	"log"
 	"tarapower/router"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/spf13/cobra"
 )
 
@@ -53,7 +52,9 @@ func scanBuckets() {
 		status := key.(string)
 		vector := value.([]uint64)
 		log.Printf("%s", status)
-		spew.Dump(vector)
+		for _, bucketId := range vector {
+			log.Printf("  bucket = %d", bucketId)
+		}
 		return true
 	})
 }
