@@ -5,7 +5,6 @@ Copyright © 2022 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
-	"fmt"
 	"log"
 	"tarapower/router"
 
@@ -24,7 +23,6 @@ var spacesCmd = &cobra.Command{
 		- conn.select( "_index", ..... )
 	- вывести в виде статистики`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("spaces called")
 		showSpaces()
 	},
 }
@@ -35,8 +33,7 @@ func init() {
 
 func showSpaces() {
 	r := router.Router{
-		//Replicasets: make(map[string]*tarantool.Connection),
-		Replicasets: make(map[string]router.Instance),
+		Replicasets: make(map[string]router.MasterInstance),
 	}
 	var configFile = "/tmp/vshard_cfg.yaml"
 	if err := r.ReadConfigFile(configFile); err != nil {
@@ -47,24 +44,8 @@ func showSpaces() {
 	}
 	defer r.CloseConnections()
 
-	//if err := r.Bootstrap(); err != nil {
-	//	log.Fatalf("scan error\n%v", err)
-	//}
-
-	/*
-		r.CreateSpacesTable_sync()
-		log.Println("\n\nSpaces Table:")
-		r.Spaces.Range(func(i, s interface{}) bool {
-			spaceID := i.(uint64)
-			space := s.(router.Space)
-			log.Printf("  space name = '%s'  id = %d\n", space.Name, spaceID)
-			for _, index := range space.Indexes {
-				log.Printf("    index = '%s'  id = %d\n", index.Name, index.ID)
-			}
-			return true
-		})
-	*/
 	r.CreateSpacesTable()
+
 	log.Println("\n\nSpaces Table:")
 	for uuid, instance := range r.Replicasets {
 		log.Printf("instance name = '%s'  host = %s\n", uuid, instance.Host)

@@ -17,7 +17,7 @@ var bootstrapCmd = &cobra.Command{
 	Use:   "bootstrap [config_source]",
 	Short: "bootstrap vshard",
 	Long:  ` `,
-	Args:  cobra.ExactArgs(1),
+	//Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		//spew.Dump(args)
 		cfg_file, err := cmd.Flags().GetString("cfg-file")
@@ -25,14 +25,14 @@ var bootstrapCmd = &cobra.Command{
 			log.Fatalf("could not load param instance-addr\n%v", err)
 		}
 
-		switch args[0] {
-		case "file":
-			bootstrapFromFile(cfg_file)
-		case "remote":
-			log.Fatalf("remote not implemented")
-		default:
-			log.Fatalf("valid arguments: file, remote")
-		}
+		//switch args[0] {
+		//case "file":
+		bootstrapFromFile(cfg_file)
+		//case "remote":
+		//	log.Fatalf("remote not implemented")
+		//default:
+		//	log.Fatalf("valid arguments: file, remote")
+		//}
 	},
 }
 
@@ -49,15 +49,13 @@ func init() {
 	// is called directly, e.g.:
 	bootstrapCmd.Flags().StringP("cfg-file", "f", "/tmp/vshard_cfg.yaml",
 		"use this param to load vshard cfg file")
-	bootstrapCmd.SetArgs([]string{"arg1", "arg2"})
+	//bootstrapCmd.SetArgs([]string{"file"})
 }
 
 func bootstrapFromFile(configFile string) {
 	r := router.Router{
-		//Replicasets: make(map[string]*tarantool.Connection),
-		Replicasets: make(map[string]router.Instance),
+		Replicasets: make(map[string]router.MasterInstance),
 	}
-
 	if err := r.ReadConfigFile(configFile); err != nil {
 		log.Fatalf("error reading '%s' vshard config\n%v", configFile, err)
 	}
@@ -72,9 +70,9 @@ func bootstrapFromFile(configFile string) {
 
 	r.CreateRoutesTable()
 
-	r.Routes.Range(func(b, c interface{}) bool {
-		bucketId := b.(uint64)
-		conn := c.(*tarantool.Connection)
+	r.Routes.Range(func(key, value interface{}) bool {
+		bucketId := key.(uint64)
+		conn := value.(*tarantool.Connection)
 		log.Printf("%d %p", bucketId, conn)
 		return true
 	})

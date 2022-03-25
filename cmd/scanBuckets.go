@@ -32,8 +32,7 @@ func init() {
 
 func scanBuckets() {
 	r := router.Router{
-		//Replicasets: make(map[string]*tarantool.Connection),
-		Replicasets: make(map[string]router.Instance),
+		Replicasets: make(map[string]router.MasterInstance),
 	}
 	var configFile = "/tmp/vshard_cfg.yaml"
 	if err := r.ReadConfigFile(configFile); err != nil {
@@ -44,15 +43,15 @@ func scanBuckets() {
 	}
 	defer r.CloseConnections()
 
-	//if err := r.Bootstrap(); err != nil {
-	//	log.Fatalf("scan error\n%v", err)
-	//}
+	if err := r.Bootstrap(); err != nil {
+		log.Fatalf("bootstap error\n%v", err)
+	}
 
 	r.CreateSortesBucketTable()
 
-	r.Groups.Range(func(s, bs interface{}) bool {
-		status := s.(string)
-		vector := bs.([]uint64)
+	r.Groups.Range(func(key, value interface{}) bool {
+		status := key.(string)
+		vector := value.([]uint64)
 		log.Printf("%s", status)
 		spew.Dump(vector)
 		return true

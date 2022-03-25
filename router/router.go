@@ -62,7 +62,7 @@ type Space struct {
 	Indexes []Index
 }
 
-type Instance struct {
+type MasterInstance struct {
 	Host   string
 	UUID   string
 	Conn   *tarantool.Connection
@@ -73,8 +73,7 @@ type Router struct {
 	//Replicasets map[string]*tarantool.Connection
 	Routes      sync.Map // bucketId uint64: conn *tarantool.Connection
 	Groups      sync.Map // group string: [bucketId uint6]
-	Spaces      sync.Map // id uint64: Space
-	Replicasets map[string]Instance
+	Replicasets map[string]MasterInstance
 	VshardCfg   VshardConfig
 }
 
@@ -114,7 +113,7 @@ func (r *Router) ConnectMasterInstancies() error {
 				}
 
 				//r.Replicasets[replicasetUuid] = conn
-				var instance Instance
+				var instance MasterInstance
 				instance.Host = u.Host
 				instance.UUID = replicasetUuid
 				instance.Conn = conn
@@ -380,13 +379,11 @@ func (r *Router) readBuckets(conn *tarantool.Connection, wg *sync.WaitGroup, hoo
 
 func (r *Router) discoveryBuckets(hook readBucketHook) {
 	var wg sync.WaitGroup
-
 	log.Println("start async tasks")
 	for _, instance := range r.Replicasets {
 		wg.Add(1)
 		go r.readBuckets(instance.Conn, &wg, hook)
 	}
-
 	wg.Wait()
 }
 
@@ -399,14 +396,23 @@ func (r *Router) CreateSortesBucketTable() {
 }
 
 func (r *Router) CreateSpacesTable() {
-	var wg sync.WaitGroup
+	log.Println("sync  ")
+	for replicasetUuid, instance := range r.Replicasets {
+		log.Printf("%s %s %s", instance.Conn.NetConn().RemoteAddr().String(), instance.Host, replicasetUuid)
+		for spaceName, space := range instance.Conn.Schema().Spaces {
+			log.Printf("  space name = '%s'  id = %d\n", spaceName, space.ID)
+			for indexName, index := range space.Indexes {
+				log.Printf("    index = '%s'  id = %d\n", indexName, index.ID)
+			}
+		}
+	}
 
+	var wg sync.WaitGroup
 	log.Println("start async tasks")
 	for _, instance := range r.Replicasets {
 		wg.Add(1)
 		go r.readSpacesAndIndexes(instance, &wg)
 	}
-
 	wg.Wait()
 }
 
@@ -428,7 +434,7 @@ func (r *Router) bulkSelect(space, index interface{}, offset, limit uint32, conn
 	}
 }
 
-func (r *Router) readSpacesAndIndexes(instance Instance, wg *sync.WaitGroup) {
+func (r *Router) readSpacesAndIndexes(instance MasterInstance, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	// see tarantool.loadSchema() 66
@@ -465,70 +471,4 @@ func (r *Router) readSpacesAndIndexes(instance Instance, wg *sync.WaitGroup) {
 		}
 		return lastId
 	})
-}
-
-func (r *Router) CreateSpacesTable_sync() error {
-	for replicasetUuid, instance := range r.Replicasets {
-		log.Println("\n\n=================")
-		log.Printf(instance.Conn.NetConn().RemoteAddr().String())
-		log.Printf("replicaset Uuid = %s\n\n", replicasetUuid)
-		for spaceName, space := range instance.Conn.Schema().Spaces {
-			log.Printf("  space name = '%s'  id = %d\n", spaceName, space.ID)
-			for indexName, index := range space.Indexes {
-				log.Printf("    index = '%s'  id = %d\n", indexName, index.ID)
-			}
-		}
-
-		var lastId uint64 = 0
-		for bulk := 0; bulk < 777; bulk++ {
-			// see tarantool.loadSchema() 66
-			resp, err := instance.Conn.Exec(
-				tarantool.Select("_space", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
-			if err != nil {
-				return fmt.Errorf("fail to select spaces\n%v", err)
-			}
-			if len(resp) == 0 {
-				break
-			}
-			for _, row := range resp {
-				row := row.([]interface{})
-				var space Space
-				space.ID = row[0].(uint64)
-				space.Name = row[2].(string)
-				lastId = space.ID
-				r.Spaces.Store(space.ID, space)
-			}
-		}
-
-		lastId = 0
-		for bulk := 0; bulk < 777; bulk++ {
-			// see tarantool.loadSchema() 121
-			resp, err := instance.Conn.Exec(
-				tarantool.Select("_index", 0, 0, 100, tarantool.IterGt, []interface{}{lastId}))
-			if err != nil {
-				return fmt.Errorf("fail to select indexes\n%v", err)
-			}
-			if len(resp) == 0 {
-				break
-			}
-			for _, row := range resp {
-				row := row.([]interface{})
-				var index Index
-				index.ID = uint64(row[1].(int64))
-				index.Name = row[2].(string)
-				spaceID := row[0].(uint64)
-				lastId = spaceID
-
-				s, loaded := r.Spaces.Load(spaceID)
-				if !loaded {
-					return fmt.Errorf("fail to load space %d\n%v", spaceID, err)
-				} else {
-					space := s.(Space)
-					space.Indexes = append(space.Indexes, index)
-					r.Spaces.Store(space.ID, space)
-				}
-			}
-		}
-	}
-	return nil
 }
