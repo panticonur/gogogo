@@ -13,8 +13,8 @@ import (
 )
 
 // getcfgCmd represents the getcfg command
-var getcfgCmd = &cobra.Command{
-	Use:   "getcfg",
+var getCfgCmd = &cobra.Command{
+	Use:   "getCfg",
 	Short: "get config from cartridge vshard",
 	Long: `first need to bootstrap vshard:
 		cartridge replicasets setup --bootstrap-vshard`,
@@ -28,8 +28,8 @@ var getcfgCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(getcfgCmd)
-	getcfgCmd.Flags().StringP("address", "a", "127.0.0.1:3301",
+	rootCmd.AddCommand(getCfgCmd)
+	getCfgCmd.Flags().StringP("address", "a", "127.0.0.1:3301",
 		"use this param to connect to cartridge instance")
 }
 
